@@ -10,7 +10,9 @@
 
   <script>
     const ROOM = "demo-room";
-    const socket = io("http://localhost:5000");
+    const socket = io(window.location.hostname === 'localhost' 
+  ? 'http://localhost:5000' 
+  : `http://${window.location.hostname}:5000`);
     const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
     let pc, localStream;
 

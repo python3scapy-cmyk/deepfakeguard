@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trust Score Dashboard - Live Verification</title>
+    <meta name="description" content="Real-time AI trust score verification dashboard.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary:#f0f2f7;--bg-card:#ffffff;--bg-tertiary:#eef0f6;
+            --text-primary:#13151a;--text-secondary:#4a5066;--text-muted:#8891aa;
+            --border:#dde1ef;--border-light:#eaedf7;
+            --accent:#4f6ef7;--accent-light:rgba(79,110,247,0.1);
+            --shadow-sm:0 1px 3px rgba(30,40,80,0.07),0 1px 2px rgba(30,40,80,0.05);
+            --shadow:0 4px 16px rgba(30,40,80,0.08),0 1px 4px rgba(30,40,80,0.06);
+            --shadow-hover:0 8px 24px rgba(30,40,80,0.13),0 2px 8px rgba(30,40,80,0.08);
+            --radius:16px;--radius-sm:10px;--radius-xs:6px;
+            --success:#18b96b;--success-bg:rgba(24,185,107,0.1);
+            --warning:#f59e0b;--warning-bg:rgba(245,158,11,0.1);
+            --danger:#ef4444;--danger-bg:rgba(239,68,68,0.1);
+            --video-bg:#090d1a;--header-glass:rgba(255,255,255,0.88);
+        }
+        [data-theme="dark"] {
+            --bg-primary:#0b0f1a;--bg-card:#151d2e;--bg-tertiary:#1a2236;
+            --text-primary:#e8edf8;--text-secondary:#8fa0c0;--text-muted:#56678a;
+            --border:#1e2d47;--border-light:#182035;
+            --accent:#6b8aff;--accent-light:rgba(107,138,255,0.12);
+            --shadow-sm:0 1px 3px rgba(0,0,0,0.4);
+            --shadow:0 4px 16px rgba(0,0,0,0.35),0 1px 4px rgba(0,0,0,0.3);
+            --shadow-hover:0 8px 32px rgba(0,0,0,0.5);
+            --video-bg:#04070f;--header-glass:rgba(11,15,26,0.92);
+            --success:#22c97a;--success-bg:rgba(34,201,122,0.12);
+            --warning:#f6c842;--warning-bg:rgba(246,200,66,0.12);
+            --danger:#ff5a5a;--danger-bg:rgba(255,90,90,0.12);
+        }
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg-primary);color:var(--text-primary);min-height:100vh;transition:background .35s,color .35s;}
+        .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
+        button:focus-visible,.ring-label:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+        .header{display:flex;justify-content:space-between;align-items:center;padding:14px 28px;background:var(--header-glass);backdrop-filter:blur(16px);border-bottom:1px solid var(--border-light);position:sticky;top:0;z-index:200;}
+        .header-left{display:flex;align-items:center;gap:14px;}
+        .live-dot{width:10px;height:10px;background:var(--success);border-radius:50%;box-shadow:0 0 0 3px var(--success-bg),0 0 12px var(--success);animation:livePulse 2s infinite;flex-shrink:0;}
+        @keyframes livePulse{0%,100%{box-shadow:0 0 0 3px var(--success-bg),0 0 12px var(--success);}50%{box-shadow:0 0 0 6px var(--success-bg),0 0 18px var(--success);}}
+        .header h1{font-size:17px;font-weight:700;letter-spacing:-0.3px;}
+        .header-subtitle{font-size:12px;color:var(--text-muted);}
+        .controls{display:flex;gap:8px;align-items:center;}
+        .ctrl-group{display:flex;gap:2px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;}
+        .toggle-btn{padding:7px 16px;border:none;background:transparent;color:var(--text-secondary);border-radius:7px;cursor:pointer;font-size:13px;font-weight:600;font-family:'Inter',sans-serif;transition:all .2s;}
+        .toggle-btn:hover{color:var(--text-primary);background:var(--bg-card);}
+        .toggle-btn.active{background:var(--bg-card);color:var(--accent);box-shadow:var(--shadow-sm);}
+        .theme-btn{padding:8px 14px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);border-radius:var(--radius-sm);cursor:pointer;font-size:13px;font-weight:600;font-family:'Inter',sans-serif;transition:all .2s;}
+        .theme-btn:hover{border-color:var(--accent);color:var(--accent);}
+        .session-badge{padding:6px 12px;background:var(--accent-light);color:var(--accent);border-radius:var(--radius-sm);font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
+        .device-indicator{position:fixed;bottom:20px;right:20px;padding:8px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:20px;font-size:11px;font-weight:600;color:var(--text-muted);box-shadow:var(--shadow);z-index:300;}
+        .container{max-width:1680px;margin:0 auto;padding:24px 28px;}
+        .layout-split{display:grid;grid-template-columns:1fr 440px;gap:24px;align-items:start;}
+        .layout-stacked .layout-split{grid-template-columns:1fr;}
+        .layout-stacked .video-panel{aspect-ratio:16/7;max-height:380px;}
+        .layout-stacked .scores-grid{grid-template-columns:repeat(5,1fr);}
+        .layout-stacked .panel-injection{grid-column:span 1;}
+        .layout-stacked .scores-column{display:grid;grid-template-columns:360px 1fr;gap:20px;align-items:start;}
+        .video-panel{background:var(--video-bg);border-radius:var(--radius);overflow:hidden;position:relative;box-shadow:var(--shadow);transition:box-shadow .3s;aspect-ratio:4/3;animation:slideUp .4s ease backwards;}
+        .video-panel:hover{box-shadow:var(--shadow-hover);}
+        .video-el{width:100%;height:100%;object-fit:cover;display:block;background:var(--video-bg);}
+        .video-placeholder{position:absolute;inset:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,.35);gap:14px;background:radial-gradient(ellipse at center,rgba(79,110,247,.06) 0%,transparent 70%);}
+        .video-panel.stream-active .video-placeholder{display:none;}
+        .video-panel:not(.stream-active) .video-badge{display:none;}
+        .video-icon-ring{width:72px;height:72px;border:2px solid rgba(255,255,255,.12);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:30px;}
+        .video-label-main{font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.3);text-align:center;padding:0 16px;}
+        .video-badge{position:absolute;top:16px;left:16px;background:rgba(239,68,68,.92);color:white;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:1px;display:flex;align-items:center;gap:6px;animation:badgePulse 2s infinite;}
+        .video-badge .dot{width:6px;height:6px;background:white;border-radius:50%;}
+        @keyframes badgePulse{0%,100%{opacity:1;}50%{opacity:.65;}}
+        .video-meta{position:absolute;bottom:16px;right:16px;display:flex;gap:6px;}
+        .meta-pill{background:rgba(0,0,0,.55);backdrop-filter:blur(8px);color:rgba(255,255,255,.85);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;}
+        .video-timer{position:absolute;bottom:16px;left:16px;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);color:rgba(255,255,255,.75);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;}
+        .pip-window{position:absolute;bottom:56px;right:16px;width:200px;aspect-ratio:4/3;background:#060a14;border-radius:10px;border:2px solid rgba(255,255,255,.18);overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.6);cursor:move;z-index:50;transition:border-color .2s,box-shadow .2s;user-select:none;touch-action:none;}
+        .pip-window:hover{border-color:rgba(107,138,255,.6);}
+        .pip-video{width:100%;height:100%;object-fit:cover;display:block;}
+        .pip-inner{position:absolute;inset:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:radial-gradient(ellipse at center,rgba(79,110,247,.08) 0%,transparent 70%);}
+        .pip-window.stream-active .pip-inner{display:none;}
+        .pip-icon{font-size:18px;opacity:.5;}
+        .pip-label{font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.3);}
+        .pip-header-bar{position:absolute;top:0;left:0;right:0;padding:5px 8px;background:linear-gradient(to bottom,rgba(0,0,0,.6) 0%,transparent 100%);display:flex;justify-content:space-between;align-items:center;z-index:2;}
+        .pip-title{font-size:9px;font-weight:700;letter-spacing:1px;color:rgba(255,255,255,.5);text-transform:uppercase;}
+        .pip-close{width:16px;height:16px;background:rgba(255,255,255,.12);border:none;border-radius:50%;color:rgba(255,255,255,.6);font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s;}
+        .pip-close:hover{background:rgba(239,68,68,.5);color:white;}
+        .pip-toggle-btn{position:absolute;top:16px;right:16px;padding:5px 10px;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.15);border-radius:6px;color:rgba(255,255,255,.7);font-size:10px;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;transition:all .2s;z-index:10;}
+        .pip-toggle-btn:hover{background:rgba(79,110,247,.5);border-color:rgba(107,138,255,.5);color:white;}
+        .pip-restore-btn{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);padding:3px 8px;background:rgba(79,110,247,.25);border:none;border-radius:4px;color:rgba(255,255,255,.6);font-size:8px;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;text-transform:uppercase;z-index:3;transition:all .2s;}
+        .pip-restore-btn:hover{background:rgba(79,110,247,.5);color:white;}
+        .pip-window.pip-hidden{display:none;}
+        .scores-column{display:flex;flex-direction:column;gap:20px;}
+        .trust-score-band{background:var(--bg-card);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);border:1px solid var(--border-light);transition:all .35s;animation:slideUp .4s ease .02s backwards;}
+        .trust-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;}
+        .trust-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-muted);}
+        .trust-status{padding:5px 14px;border-radius:20px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;transition:all .4s;}
+        .status-trusted{background:var(--success-bg);color:var(--success);}
+        .status-suspicious{background:var(--warning-bg);color:var(--warning);}
+        .status-fraud{background:var(--danger-bg);color:var(--danger);}
+        .score-gauge{display:flex;align-items:center;gap:20px;margin-bottom:16px;}
+        .score-ring-container{flex-shrink:0;width:88px;height:88px;position:relative;}
+        .score-ring-container svg{transform:rotate(-90deg);width:88px;height:88px;}
+        .ring-bg{fill:none;stroke:var(--border);stroke-width:7;}
+        .ring-fill{fill:none;stroke-width:7;stroke-linecap:round;stroke-dasharray:226;transition:stroke-dashoffset .8s cubic-bezier(.4,0,.2,1),stroke .4s;}
+        .ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:22px;font-weight:800;line-height:1;transition:color .4s;cursor:pointer;border-radius:50%;}
+        .ring-label small{font-size:9px;font-weight:600;color:var(--text-muted);margin-top:2px;}
+        .score-segments{flex:1;display:flex;flex-direction:column;gap:9px;}
+        .segment-bar{display:flex;align-items:center;gap:10px;}
+        .segment-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;width:68px;text-align:right;color:var(--text-muted);flex-shrink:0;}
+        .segment-track{flex:1;height:7px;background:var(--bg-tertiary);border-radius:4px;overflow:hidden;}
+        .segment-fill{height:100%;border-radius:4px;transition:width .7s cubic-bezier(.4,0,.2,1);}
+        .fill-trusted{background:linear-gradient(90deg,var(--success),#4ade80);}
+        .fill-suspicious{background:linear-gradient(90deg,var(--warning),#fbbf24);}
+        .fill-fraud{background:linear-gradient(90deg,var(--danger),#f87171);}
+        .segment-pct{font-size:10px;font-weight:700;width:28px;text-align:right;color:var(--text-muted);flex-shrink:0;}
+        .trust-gradient-bar{height:10px;border-radius:6px;background:linear-gradient(90deg,var(--danger) 0%,var(--warning) 45%,var(--success) 100%);position:relative;margin-bottom:6px;}
+        .trust-gradient-needle{position:absolute;top:-5px;width:4px;height:20px;background:var(--text-primary);border-radius:2px;transform:translateX(-50%);transition:left .8s cubic-bezier(.4,0,.2,1);box-shadow:0 0 6px rgba(0,0,0,.3);}
+        .trust-bar-labels{display:flex;justify-content:space-between;font-size:9px;font-weight:700;letter-spacing:.5px;color:var(--text-muted);text-transform:uppercase;}
+        .reason-area{background:var(--bg-tertiary);border-radius:var(--radius-sm);padding:13px 16px;border-left:3px solid var(--warning);font-size:12px;color:var(--text-secondary);line-height:1.6;font-style:italic;margin-top:16px;transition:border-color .4s;display:flex;gap:8px;align-items:flex-start;}
+        .reason-icon{font-style:normal;flex-shrink:0;margin-top:1px;}
+        .cycle-btn{margin-top:14px;width:100%;padding:9px;border:1px dashed var(--border);background:transparent;color:var(--text-muted);border-radius:var(--radius-sm);font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;transition:all .2s;}
+        .cycle-btn:hover{border-color:var(--accent);color:var(--accent);}
+        .scores-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+        .score-panel{background:var(--bg-card);border-radius:var(--radius-sm);padding:18px;box-shadow:var(--shadow-sm);border:1px solid var(--border-light);transition:all .25s;cursor:default;animation:slideUp .4s ease backwards;position:relative;overflow:hidden;}
+        .score-panel::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:var(--radius-sm) var(--radius-sm) 0 0;opacity:.7;}
+        .score-panel.panel-good::before{background:linear-gradient(90deg,var(--success),#4ade80);}
+        .score-panel.panel-warn::before{background:linear-gradient(90deg,var(--warning),#fbbf24);}
+        .score-panel.panel-bad::before{background:linear-gradient(90deg,var(--danger),#f87171);}
+        .score-panel:hover{box-shadow:var(--shadow-hover);transform:translateY(-2px);border-color:var(--border);}
+        .score-panel-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
+        .score-panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);}
+        .score-chip{padding:3px 8px;border-radius:20px;font-size:9px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;}
+        .chip-good{background:var(--success-bg);color:var(--success);}
+        .chip-warn{background:var(--warning-bg);color:var(--warning);}
+        .chip-bad{background:var(--danger-bg);color:var(--danger);}
+        .score-panel-value{font-size:36px;font-weight:800;line-height:1;letter-spacing:-1px;margin-bottom:10px;}
+        .val-good{color:var(--success);}.val-warn{color:var(--warning);}.val-bad{color:var(--danger);}
+        .score-bar{height:5px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;}
+        .score-bar-fill{height:100%;border-radius:3px;transition:width .6s cubic-bezier(.4,0,.2,1);}
+        .score-panel-footer{margin-top:10px;font-size:11px;color:var(--text-muted);}
+        .panel-injection{grid-column:1/-1;}
+        .injection-detail{margin-top:12px;display:flex;gap:12px;}
+        .injection-stat{flex:1;background:var(--bg-tertiary);border-radius:var(--radius-xs);padding:10px 12px;font-size:11px;}
+        .injection-stat-label{color:var(--text-muted);font-weight:600;margin-bottom:3px;}
+        .injection-stat-value{color:var(--text-primary);font-weight:700;font-size:13px;}
+        @media(max-width:1100px){.layout-split{grid-template-columns:1fr!important;}.video-panel{aspect-ratio:16/9;max-height:360px;}.scores-grid{grid-template-columns:repeat(3,1fr)!important;}.panel-injection{grid-column:span 1!important;}.layout-stacked .scores-column{grid-template-columns:1fr;}}
+        @media(max-width:640px){.container{padding:14px 16px;}.header{padding:12px 16px;flex-wrap:wrap;gap:10px;}.header h1{font-size:15px;}.session-badge{display:none;}.video-panel{aspect-ratio:4/3;max-height:260px;}.scores-grid{grid-template-columns:1fr 1fr!important;}.score-panel-value{font-size:28px;}.pip-window{width:140px;}}
+        @keyframes slideUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+        .score-panel:nth-child(1){animation-delay:.06s;}.score-panel:nth-child(2){animation-delay:.12s;}.score-panel:nth-child(3){animation-delay:.18s;}.score-panel:nth-child(4){animation-delay:.24s;}.score-panel:nth-child(5){animation-delay:.30s;}
+        ::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+        @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;}}
+    </style>
+</head>
+<body>
+<div id="srStatus" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+<header class="header">
+    <div class="header-left">
+        <div class="live-dot" aria-hidden="true"></div>
+        <div>
+            <h1>Live Verification Session</h1>
+            <div class="header-subtitle"><span id="sessionIdText">Session ID: pending</span> &middot; Agent Trust Analysis</div>
+        </div>
+    </div>
+    <div class="controls">
+        <div class="ctrl-group" role="group" aria-label="Layout">
+            <button class="toggle-btn active" id="btnSplit" aria-pressed="true" onclick="setLayout('split')">Video Left</button>
+            <button class="toggle-btn" id="btnStack" aria-pressed="false" onclick="setLayout('stack')">Video Top</button>
+        </div>
+        <button class="theme-btn" id="btnTheme" aria-pressed="false" onclick="toggleTheme()">&#x1F319; Dark</button>
+        <span class="session-badge">&#x25CF; Live</span>
+    </div>
+</header>
+<main class="container" id="mainContainer">
+    <h2 class="sr-only">Live verification dashboard</h2>
+    <div class="layout-split" id="layoutWrapper">
+        <div class="video-panel" id="videoPanel">
+            <video class="video-el" id="localVideo" autoplay playsinline muted></video>
+            <div class="video-placeholder">
+                <div class="video-icon-ring" aria-hidden="true">&#x1F4F9;</div>
+                <div class="video-label-main">Live video feed</div>
+            </div>
+            <div class="video-badge"><span class="dot" aria-hidden="true"></span> LIVE</div>
+            <button class="pip-toggle-btn" id="pipToggleBtn" aria-label="Toggle picture-in-picture window" onclick="togglePip()">&#x229E; PiP</button>
+            <div class="pip-window" id="pipWindow">
+                <video class="pip-video" id="pipVideo" autoplay playsinline></video>
+                <div class="pip-header-bar">
+                    <span class="pip-title" id="pipTitle">Top View</span>
+                    <button class="pip-close" aria-label="Close picture-in-picture window" onclick="togglePip()">&#x2715;</button>
+                </div>
+                <div class="pip-inner">
+                    <div class="pip-icon" id="pipIcon" aria-hidden="true">&#x1F3A5;</div>
+                    <div class="pip-label" id="pipViewLabel">Alt Feed</div>
+                </div>
+                <button class="pip-restore-btn" onclick="swapToLayout()">Switch View</button>
+            </div>
+            <div class="video-timer" id="sessionTimer">00:00</div>
+            <div class="video-meta">
+                <span class="meta-pill">720p</span>
+                <span class="meta-pill">30 fps</span>
+            </div>
+        </div>
+        <div class="scores-column">
+            <div class="trust-score-band">
+                <div class="trust-header">
+                    <h2 class="trust-title">Overall Trust Score</h2>
+                    <span class="trust-status status-suspicious" id="trustStatus">Suspicious</span>
+                </div>
+                <div class="score-gauge">
+                    <div class="score-ring-container">
+                        <svg viewBox="0 0 88 88" role="img" aria-hidden="true">
+                            <circle class="ring-bg" cx="44" cy="44" r="36"/>
+                            <circle class="ring-fill" cx="44" cy="44" r="36" id="ringFill" stroke="var(--warning)" style="stroke-dashoffset:63.28"/>
+                        </svg>
+                        <div class="ring-label" id="ringLabel" aria-hidden="true">
+                            <span id="trustScore">72</span>
+                            <small>/100</small>
+                        </div>
+                    </div>
+                    <div class="score-segments">
+                        <div class="segment-bar">
+                            <span class="segment-label">Trusted</span>
+                            <div class="segment-track"><div class="segment-fill fill-trusted" id="segTrusted" style="width:0%"></div></div>
+                            <span class="segment-pct" id="pctTrusted">&mdash;</span>
+                        </div>
+                        <div class="segment-bar">
+                            <span class="segment-label">Suspicious</span>
+                            <div class="segment-track"><div class="segment-fill fill-suspicious" id="segSuspicious" style="width:72%"></div></div>
+                            <span class="segment-pct" id="pctSuspicious">72%</span>
+                        </div>
+                        <div class="segment-bar">
+                            <span class="segment-label">Fraud</span>
+                            <div class="segment-track"><div class="segment-fill fill-fraud" id="segFraud" style="width:0%"></div></div>
+                            <span class="segment-pct" id="pctFraud">&mdash;</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="trust-gradient-bar">
+                    <div class="trust-gradient-needle" id="trustNeedle" style="left:72%"></div>
+                </div>
+                <div class="trust-bar-labels"><span>Fraud</span><span>Suspicious</span><span>Trusted</span></div>
+                <div class="reason-area" id="reasonArea">
+                    <span class="reason-icon" id="reasonIcon" aria-hidden="true">&#x26A0;&#xFE0F;</span>
+                    <span id="reasonText">Score reduced due to elevated injection-risk signal and anomalous audio patterns detected in frequency analysis.</span>
+                </div>
+                <button class="cycle-btn" id="cycleBtn">Cycle test scenario &rarr; (showing simulated data)</button>
+            </div>
+            <div class="scores-grid">
+                <div class="score-panel panel-good">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Identity</h3><span class="score-chip chip-good" id="chip0">Pass</span></div>
+                    <div class="score-panel-value val-good" id="val0">92</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:92%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
+                    <div class="score-panel-footer" id="foot0">ID document verified</div>
+                </div>
+                <div class="score-panel panel-good">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-good" id="chip1">Pass</span></div>
+                    <div class="score-panel-value val-good" id="val1">88</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:88%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
+                    <div class="score-panel-footer" id="foot1">Challenge passed</div>
+                </div>
+                <div class="score-panel panel-warn">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-warn" id="chip2">Review</span></div>
+                    <div class="score-panel-value val-warn" id="val2">65</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:65%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
+                    <div class="score-panel-footer" id="foot2">Minor artifacts detected</div>
+                </div>
+                <div class="score-panel panel-warn">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-warn" id="chip3">Review</span></div>
+                    <div class="score-panel-value val-warn" id="val3">78</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:78%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
+                    <div class="score-panel-footer" id="foot3">Slight frequency anomaly</div>
+                </div>
+                <div class="score-panel panel-bad panel-injection">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-bad" id="chip4">Alert</span></div>
+                    <div class="score-panel-value val-bad" id="val4">45</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar4" style="width:45%;background:linear-gradient(90deg,var(--danger),#f87171)"></div></div>
+                    <div class="score-panel-footer" id="foot4">Unusual frame timing &mdash; possible replay attack</div>
+                    <div class="injection-detail">
+                        <div class="injection-stat"><div class="injection-stat-label">Frame timing deviation</div><div class="injection-stat-value" style="color:var(--danger)">+340ms anomaly</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Replay confidence</div><div class="injection-stat-value" style="color:var(--warning)">64%</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Signal type</div><div class="injection-stat-value">Frame injection</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+<div class="device-indicator" id="deviceIndicator">Viewport &middot; Desktop</div>
+<script>
+    var darkMode = false, currentLayout = 'split', pipVisible = true, timerSeconds = 0, scenarioIdx = 1;
+
+    function toggleTheme(){
+        darkMode = !darkMode;
+        if (darkMode) { document.body.setAttribute('data-theme', 'dark'); }
+        else { document.body.removeAttribute('data-theme'); }
+        var btn = document.getElementById('btnTheme');
+        btn.textContent = darkMode ? '\u2600\uFE0F Light' : '\uD83C\uDF19 Dark';
+        btn.setAttribute('aria-pressed', String(darkMode));
+    }
+
+    function resetPipPosition(){
+        var pip = document.getElementById('pipWindow');
+        pip.style.left = '';
+        pip.style.top = '';
+        pip.style.right = '';
+        pip.style.bottom = '';
+    }
+
+    function setLayout(layout){
+        currentLayout = layout;
+        var c = document.getElementById('mainContainer');
+        var btnSplit = document.getElementById('btnSplit');
+        var btnStack = document.getElementById('btnStack');
+        btnSplit.classList.toggle('active', layout === 'split');
+        btnStack.classList.toggle('active', layout === 'stack');
+        btnSplit.setAttribute('aria-pressed', String(layout === 'split'));
+        btnStack.setAttribute('aria-pressed', String(layout === 'stack'));
+        resetPipPosition();
+        if (layout === 'stack') {
+            c.classList.add('layout-stacked');
+            document.getElementById('pipTitle').textContent = 'Left View';
+            document.getElementById('pipViewLabel').textContent = 'Side Feed';
+            document.getElementById('pipIcon').textContent = '\uD83D\uDCFA';
+        } else {
+            c.classList.remove('layout-stacked');
+            document.getElementById('pipTitle').textContent = 'Top View';
+            document.getElementById('pipViewLabel').textContent = 'Alt Feed';
+            document.getElementById('pipIcon').textContent = '\uD83C\uDFA5';
+        }
+    }
+
+    function togglePip(){
+        pipVisible = !pipVisible;
+        document.getElementById('pipWindow').classList.toggle('pip-hidden', !pipVisible);
+        document.getElementById('pipToggleBtn').textContent = pipVisible ? '\u229E PiP' : '\u229F PiP';
+    }
+
+    function swapToLayout(){ setLayout(currentLayout === 'split' ? 'stack' : 'split'); }
+
+    // Picture-in-picture dragging via Pointer Events, which covers
+    // mouse, touch, and pen with one set of listeners.
+    (function(){
+        var pip = document.getElementById('pipWindow');
+        var dragging = false, startX, startY, startLeft, startTop;
+
+        pip.addEventListener('pointerdown', function(e){
+            if (e.target.closest('button')) return;
+            dragging = true;
+            pip.setPointerCapture(e.pointerId);
+            var r = pip.getBoundingClientRect();
+            var pr = pip.offsetParent.getBoundingClientRect();
+            pip.style.right = 'auto';
+            pip.style.bottom = 'auto';
+            startLeft = r.left - pr.left;
+            startTop = r.top - pr.top;
+            pip.style.left = startLeft + 'px';
+            pip.style.top = startTop + 'px';
+            startX = e.clientX;
+            startY = e.clientY;
+            pip.style.cursor = 'grabbing';
+        });
+
+        pip.addEventListener('pointermove', function(e){
+            if (!dragging) return;
+            var dx = e.clientX - startX;
+            var dy = e.clientY - startY;
+            pip.style.left = (startLeft + dx) + 'px';
+            pip.style.top = (startTop + dy) + 'px';
+        });
+
+        function endDrag(e){
+            if (!dragging) return;
+            dragging = false;
+            pip.style.cursor = 'move';
+            if (pip.hasPointerCapture(e.pointerId)) pip.releasePointerCapture(e.pointerId);
+        }
+        pip.addEventListener('pointerup', endDrag);
+        pip.addEventListener('pointercancel', endDrag);
+    })();
+
+    setInterval(function(){
+        timerSeconds++;
+        var m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+        var s = String(timerSeconds % 60).padStart(2, '0');
+        document.getElementById('sessionTimer').textContent = m + ':' + s;
+    }, 1000);
+
+    var TIER_STYLES = {
+        good: { chipCls: 'chip-good', panelCls: 'panel-good', valCls: 'val-good', bar: 'linear-gradient(90deg,var(--success),#4ade80)' },
+        warn: { chipCls: 'chip-warn', panelCls: 'panel-warn', valCls: 'val-warn', bar: 'linear-gradient(90deg,var(--warning),#fbbf24)' },
+        bad:  { chipCls: 'chip-bad',  panelCls: 'panel-bad',  valCls: 'val-bad',  bar: 'linear-gradient(90deg,var(--danger),#f87171)' }
+    };
+
+    // Each scenario's signals are one object per panel, in fixed
+    // display order: identity, liveness, visual deepfake, audio
+    // deepfake, injection risk. This replaces the old design of six
+    // separate parallel arrays that had to be kept in sync by hand.
+    var mockScenarios = [
+        {
+            trust: 92, status: 'Trusted', statusClass: 'status-trusted', ringColor: 'var(--success)',
+            reasonIcon: 'OK', reasonBorder: 'var(--success)',
+            reason: 'All signals within normal thresholds. Biometric match confirmed with high confidence.',
+            signals: [
+                { tier: 'good', score: 95, chip: 'Pass', footer: 'ID document verified' },
+                { tier: 'good', score: 94, chip: 'Pass', footer: 'Challenge passed' },
+                { tier: 'good', score: 90, chip: 'Pass', footer: 'No artifacts found' },
+                { tier: 'good', score: 93, chip: 'Pass', footer: 'Voice pattern matched' },
+                { tier: 'good', score: 88, chip: 'Pass', footer: 'No anomalies detected' }
+            ]
+        },
+        {
+            trust: 72, status: 'Suspicious', statusClass: 'status-suspicious', ringColor: 'var(--warning)',
+            reasonIcon: 'WARN', reasonBorder: 'var(--warning)',
+            reason: 'Score reduced due to elevated injection-risk signal and anomalous audio patterns detected in frequency analysis.',
+            signals: [
+                { tier: 'good', score: 92, chip: 'Pass', footer: 'ID document verified' },
+                { tier: 'good', score: 88, chip: 'Pass', footer: 'Challenge passed' },
+                { tier: 'warn', score: 65, chip: 'Review', footer: 'Minor artifacts detected' },
+                { tier: 'warn', score: 78, chip: 'Review', footer: 'Slight frequency anomaly' },
+                { tier: 'bad', score: 45, chip: 'Alert', footer: 'Unusual frame timing \u2014 possible replay attack' }
+            ]
+        },
+        {
+            trust: 34, status: 'Potential fraud', statusClass: 'status-fraud', ringColor: 'var(--danger)',
+            reasonIcon: 'ERR', reasonBorder: 'var(--danger)',
+            reason: 'Multiple critical alerts: deepfake artifacts confirmed in both visual and audio streams. Session flagged for termination.',
+            signals: [
+                { tier: 'bad', score: 40, chip: 'Fail', footer: 'Identity mismatch detected' },
+                { tier: 'bad', score: 35, chip: 'Fail', footer: 'Liveness challenge failed' },
+                { tier: 'bad', score: 22, chip: 'Fail', footer: 'Deepfake artifacts confirmed' },
+                { tier: 'bad', score: 28, chip: 'Fail', footer: 'Synthetic voice detected' },
+                { tier: 'bad', score: 15, chip: 'Critical', footer: 'Active injection attempt detected' }
+            ]
+        }
+    ];
+
+    function updateScreenReaderStatus(s){
+        document.getElementById('srStatus').textContent =
+            'Trust score ' + s.trust + ' out of 100, ' + s.status + '. ' + s.reason;
+    }
+
+    function applyScenario(idx){
+        var s = mockScenarios[idx], t = s.trust, circ = 226;
+
+        document.getElementById('ringFill').style.strokeDashoffset = circ - (t / 100) * circ;
+        document.getElementById('ringFill').style.stroke = s.ringColor;
+        document.getElementById('trustScore').textContent = t;
+        document.getElementById('ringLabel').style.color = s.ringColor;
+
+        var statusEl = document.getElementById('trustStatus');
+        statusEl.textContent = s.status;
+        statusEl.className = 'trust-status ' + s.statusClass;
+
+        document.getElementById('trustNeedle').style.left = t + '%';
+
+        var tW = '0%', sW = '0%', fW = '0%', tP = '\u2014', sP = '\u2014', fP = '\u2014';
+        if (t >= 80) { tW = ((t - 80) / 20 * 100) + '%'; tP = t + '%'; }
+        else if (t >= 50) { sW = ((t - 50) / 30 * 100) + '%'; sP = t + '%'; }
+        else { fW = ((50 - t) / 50 * 100) + '%'; fP = (100 - t * 2) + '%'; }
+
+        document.getElementById('segTrusted').style.width = tW;
+        document.getElementById('segSuspicious').style.width = sW;
+        document.getElementById('segFraud').style.width = fW;
+        document.getElementById('pctTrusted').textContent = tP;
+        document.getElementById('pctSuspicious').textContent = sP;
+        document.getElementById('pctFraud').textContent = fP;
+
+        var icons = { OK: '\u2705', WARN: '\u26A0\uFE0F', ERR: '\uD83D\uDEA8' };
+        document.getElementById('reasonIcon').textContent = icons[s.reasonIcon] + ' ';
+        document.getElementById('reasonText').textContent = s.reason;
+        document.getElementById('reasonArea').style.borderLeftColor = s.reasonBorder;
+
+        var panels = document.querySelectorAll('.score-panel');
+        s.signals.forEach(function(sig, i){
+            var tier = TIER_STYLES[sig.tier];
+            var panel = panels[i];
+
+            panel.classList.remove('panel-good', 'panel-warn', 'panel-bad');
+            panel.classList.add(tier.panelCls);
+
+            var valEl = document.getElementById('val' + i);
+            valEl.textContent = sig.score;
+            valEl.className = 'score-panel-value ' + tier.valCls;
+
+            var barEl = document.getElementById('bar' + i);
+            barEl.style.width = sig.score + '%';
+            barEl.style.background = tier.bar;
+
+            var chipEl = document.getElementById('chip' + i);
+            chipEl.textContent = sig.chip;
+            chipEl.className = 'score-chip ' + tier.chipCls;
+
+            document.getElementById('foot' + i).textContent = sig.footer;
+        });
+
+        updateScreenReaderStatus(s);
+    }
+
+    function generateSessionId(){
+        var d = new Date();
+        var ymd = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+        var rand = Math.random().toString(16).slice(2, 6).toUpperCase();
+        return 'VFY-' + ymd + '-' + rand;
+    }
+
+    function updateViewportLabel(){
+        var w = window.innerWidth;
+        var label = w <= 640 ? 'Mobile' : w <= 1100 ? 'Tablet' : 'Desktop';
+        document.getElementById('deviceIndicator').textContent = 'Viewport \u00B7 ' + label;
+    }
+    window.addEventListener('resize', updateViewportLabel);
+
+    // Real local camera preview. Requires a secure context (localhost
+    // or https) -- opening this file directly via file:// will not be
+    // able to request the camera.
+    async function startLocalPreview(){
+        var video = document.getElementById('localVideo');
+        var panel = document.getElementById('videoPanel');
+        var label = panel.querySelector('.video-label-main');
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            if (label) label.textContent = 'Camera not supported in this browser';
+            return;
+        }
+        try {
+            var stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            video.onloadedmetadata = function(){ panel.classList.add('stream-active'); };
+        } catch (err) {
+            if (label) label.textContent = 'Camera unavailable \u2014 check permissions';
+        }
+    }
+
+    // Hook for the Day 2 WebRTC signaling page (call.html): once your
+    // RTCPeerConnection's ontrack handler gives you the remote peer's
+    // MediaStream, call window.attachPipStream(stream) from there to
+    // show it in the picture-in-picture window.
+    function attachPipStream(stream){
+        var video = document.getElementById('pipVideo');
+        var win = document.getElementById('pipWindow');
+        video.srcObject = stream;
+        video.onloadedmetadata = function(){ win.classList.add('stream-active'); };
+    }
+    window.attachPipStream = attachPipStream;
+
+// ─────────────────────────────────────────────
+// Live polling — replaces mock scenario cycling.
+// Fetches real signal data from Flask backend
+// every 1.5 seconds and updates the dashboard.
+// ─────────────────────────────────────────────
+async function fetchLiveScores() {
+    try {
+        const res = await fetch('http://localhost:5000/scores');
+        if (!res.ok) throw new Error('Backend returned ' + res.status);
+        const data = await res.json();
+        applyLiveData(data);
+    } catch (err) {
+        // Backend unreachable — show a warning state
+        // but don't crash the dashboard
+        document.getElementById('reasonText').textContent =
+            'Cannot reach backend at localhost:5000 — is app.py running?';
+        document.getElementById('reasonArea').style.borderLeftColor = 'var(--danger)';
+    }
+}
+
+function applyLiveData(data) {
+    // ── Trust score + band ──────────────────────
+    const trust = data.trust_score;
+    const band  = data.trust_band;  // "trusted" | "suspicious" | "fraud"
+
+    if (trust === null || trust === undefined) {
+        document.getElementById('reasonText').textContent =
+            'Awaiting signals — no modules have reported yet.';
+        return;
+    }
+
+    // Ring
+    const circ = 226;
+    const ringColors = { trusted: 'var(--success)', suspicious: 'var(--warning)', fraud: 'var(--danger)' };
+    document.getElementById('ringFill').style.strokeDashoffset = circ - (trust / 100) * circ;
+    document.getElementById('ringFill').style.stroke = ringColors[band] || 'var(--warning)';
+    document.getElementById('trustScore').textContent = trust;
+    document.getElementById('ringLabel').style.color = ringColors[band] || 'var(--warning)';
+
+    // Status badge
+    const statusEl = document.getElementById('trustStatus');
+    const statusMap = {
+        trusted:    { text: 'Trusted',        cls: 'status-trusted'    },
+        suspicious: { text: 'Suspicious',      cls: 'status-suspicious' },
+        fraud:      { text: 'Potential Fraud', cls: 'status-fraud'      }
+    };
+    const s = statusMap[band] || statusMap.suspicious;
+    statusEl.textContent = s.text;
+    statusEl.className   = 'trust-status ' + s.cls;
+
+    // Needle
+    document.getElementById('trustNeedle').style.left = trust + '%';
+
+    // Segment bars
+    const tW = band === 'trusted'    ? ((trust - 80) / 20 * 100) + '%' : '0%';
+    const sW = band === 'suspicious' ? ((trust - 50) / 30 * 100) + '%' : '0%';
+    const fW = band === 'fraud'      ? ((50 - trust) / 50 * 100) + '%' : '0%';
+    document.getElementById('segTrusted').style.width    = tW;
+    document.getElementById('segSuspicious').style.width = sW;
+    document.getElementById('segFraud').style.width      = fW;
+    document.getElementById('pctTrusted').textContent    = band === 'trusted'    ? trust + '%' : '—';
+    document.getElementById('pctSuspicious').textContent = band === 'suspicious' ? trust + '%' : '—';
+    document.getElementById('pctFraud').textContent      = band === 'fraud'      ? (100 - trust * 2) + '%' : '—';
+
+    // Reason string
+    const icons = { trusted: '✅ ', suspicious: '⚠️ ', fraud: '🚨 ' };
+    document.getElementById('reasonIcon').textContent = icons[band] || '⚠️ ';
+    document.getElementById('reasonText').textContent = data.reason || 'No reason provided.';
+    document.getElementById('reasonArea').style.borderLeftColor = ringColors[band];
+
+    // Screen reader announcement
+    document.getElementById('srStatus').textContent =
+        'Trust score ' + trust + ' out of 100, ' + s.text + '. ' + (data.reason || '');
+
+    // ── Five signal panels ──────────────────────
+    const sig   = data.signals || {};
+    const tiers = data.tiers   || {};
+
+    const PANELS = [
+        { id: 0, label: 'Identity',        field: 'identity_score',        tier: tiers.identity        },
+        { id: 1, label: 'Liveness',        field: 'liveness_score',        tier: tiers.liveness        },
+        { id: 2, label: 'Visual deepfake', field: 'visual_deepfake_score', tier: tiers.visual_deepfake },
+        { id: 3, label: 'Audio deepfake',  field: 'audio_deepfake_score',  tier: tiers.audio_deepfake  },
+        { id: 4, label: 'Injection risk',  field: 'injection_risk_score',  tier: tiers.injection_risk  }
+    ];
+
+    const TIER_STYLES = {
+        good: { chipCls: 'chip-good', panelCls: 'panel-good', valCls: 'val-good', bar: 'linear-gradient(90deg,var(--success),#4ade80)', chip: 'Pass'  },
+        warn: { chipCls: 'chip-warn', panelCls: 'panel-warn', valCls: 'val-warn', bar: 'linear-gradient(90deg,var(--warning),#fbbf24)', chip: 'Review'},
+        bad:  { chipCls: 'chip-bad',  panelCls: 'panel-bad',  valCls: 'val-bad',  bar: 'linear-gradient(90deg,var(--danger),#f87171)',  chip: 'Alert' }
+    };
+
+    PANELS.forEach(panel => {
+        const score    = sig[panel.field];
+        const tierKey  = panel.tier || 'warn';
+        const style    = TIER_STYLES[tierKey] || TIER_STYLES.warn;
+        const hasScore = score !== null && score !== undefined;
+
+        const panelEl = document.querySelector('.score-panel:nth-child(' + (panel.id + 1) + ')');
+        if (panelEl) {
+            panelEl.classList.remove('panel-good', 'panel-warn', 'panel-bad');
+            panelEl.classList.add(style.panelCls);
+        }
+
+        const valEl = document.getElementById('val' + panel.id);
+        if (valEl) {
+            valEl.textContent = hasScore ? Math.round(score) : '—';
+            valEl.className   = 'score-panel-value ' + (hasScore ? style.valCls : '');
+        }
+
+        const barEl = document.getElementById('bar' + panel.id);
+        if (barEl) {
+            barEl.style.width      = hasScore ? score + '%' : '0%';
+            barEl.style.background = style.bar;
+        }
+
+        const chipEl = document.getElementById('chip' + panel.id);
+        if (chipEl) {
+            chipEl.textContent = hasScore ? style.chip : 'Pending';
+            chipEl.className   = 'score-chip ' + (hasScore ? style.chipCls : '');
+        }
+
+        const footEl = document.getElementById('foot' + panel.id);
+        if (footEl) {
+            footEl.textContent = hasScore
+                ? panel.label + ' score: ' + Math.round(score)
+                : 'Awaiting ' + panel.label.toLowerCase() + ' module...';
+        }
+    });
+
+    // ── Modules reporting count ─────────────────
+    const reporting = data.modules_reporting || [];
+    document.getElementById('sessionIdText').textContent =
+        'Session ID: ' + generateSessionId() +
+        ' · ' + reporting.length + '/3 modules active';
+}
+
+// ── Cycle button now sends a test payload ───
+// Useful for demoing without all modules running.
+document.getElementById('cycleBtn').textContent = 'Send test payload to backend →';
+document.getElementById('cycleBtn').addEventListener('click', async () => {
+    const testPayload = {
+        module: "vision",
+        session_id: "demo_test_" + Date.now(),
+        timestamp: new Date().toISOString(),
+        face_detected: true,
+        multi_face_alert: false,
+        identity_score: Math.round(60 + Math.random() * 40),
+        liveness_score: Math.round(60 + Math.random() * 40),
+        visual_deepfake_score: Math.round(60 + Math.random() * 40),
+        verdict: "REAL"
+    };
+    try {
+        await fetch('http://localhost:5000/score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(testPayload)
+        });
+    } catch (err) {
+        console.error('Test payload send failed:', err);
+    }
+});
+
+// ── Boot sequence ───────────────────────────
+updateViewportLabel();
+document.getElementById('sessionIdText').textContent = 'Session ID: ' + generateSessionId();
+startLocalPreview();
+setInterval(fetchLiveScores, 1500);  // poll every 1.5 seconds
+fetchLiveScores();                   // also fire immediately on load
+</script>
+</body>
+</html>
