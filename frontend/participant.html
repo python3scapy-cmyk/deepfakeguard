@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepfakeGuard — Participant</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    :root {
+      --success: #18b96b;
+      --danger:  #ef4444;
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, 'Inter', sans-serif;
+      background: #0b0f1a;
+      color: #e8edf8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 20px;
+    }
+
+    /* Local camera preview */
+    #localPreview {
+      width: 360px;
+      max-width: 90vw;
+      aspect-ratio: 4/3;
+      border-radius: 14px;
+      border: 2px solid rgba(255,255,255,.12);
+      background: #04070f;
+      display: none; /* shown once stream is ready */
+      object-fit: cover;
+    }
+
+    /* Camera placeholder shown before getUserMedia resolves */
+    .cam-placeholder {
+      width: 360px;
+      max-width: 90vw;
+      aspect-ratio: 4/3;
+      border-radius: 14px;
+      border: 2px dashed rgba(255,255,255,.1);
+      background: #04070f;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: rgba(255,255,255,.3);
+    }
+    .cam-placeholder.hidden { display: none; }
+    .cam-icon {
+      font-size: 36px;
+      opacity: .4;
+    }
+    .cam-text {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+
+    /* Status pill at the bottom */
+    #statusPill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 18px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background .3s, box-shadow .3s;
+    }
+    .dot.off      { background: rgba(255,255,255,.2); }
+    .dot.waiting  { background: var(--warning); box-shadow: 0 0 8px var(--warning); }
+    .dot.live     { background: var(--success); box-shadow: 0 0 8px var(--success); animation: pulse 2s infinite; }
+    .dot.error    { background: var(--danger);  box-shadow: 0 0 8px var(--danger); }
+    @keyframes pulse {
+      0%,100% { box-shadow: 0 0 8px var(--success); }
+      50%     { box-shadow: 0 0 16px var(--success); }
+    }
+
+    /* Small label above the preview */
+    .preview-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,.3);
+    }
+  </style>
+</head>
+<body>
+
+  <!--
+    Sender-only page. Captures camera + mic and sends
+    the stream to the verifier (index.html) over WebRTC.
+    Does NOT display the remote stream — this is intentional.
+    The local preview below is purely so the participant
+    can confirm their camera is working before the call connects.
+  -->
+
+  <span class="preview-label">Your camera preview</span>
+
+  <!-- shown once getUserMedia succeeds -->
+  <video id="localPreview" autoplay playsinline muted></video>
+
+  <!-- shown while waiting for camera permission -->
+  <div class="cam-placeholder" id="camPlaceholder">
+    <div class="cam-icon">&#x1F4F7;</div>
+    <div class="cam-text">Requesting camera&hellip;</div>
+  </div>
+
+  <div id="statusPill">
+    <span class="dot off" id="statusDot"></span>
+    <span id="statusText">Connecting to signaling server&hellip;</span>
+  </div>
+
+  <script>
+    var ROOM   = 'demo-room';
+    var CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    var socket = io(
+      window.location.hostname === 'localhost'
+        ? 'http://localhost:5000'
+        : 'http://' + window.location.hostname + ':5000'
+    );
+
+    var pc, localStream;
+
+    // ── UI helpers ───────────────────────────────────────────────────
+    function setStatus(text, state) {
+      // state: 'off' | 'waiting' | 'live' | 'error'
+      document.getElementById('statusText').textContent = text;
+      document.getElementById('statusDot').className = 'dot ' + (state || 'off');
+    }
+
+    function showPreview(stream) {
+      var video = document.getElementById('localPreview');
+      var placeholder = document.getElementById('camPlaceholder');
+      video.srcObject = stream;
+      video.onloadedmetadata = function () {
+        placeholder.classList.add('hidden');
+        video.style.display = 'block';
+      };
+    }
+
+    // ── Camera + peer connection ─────────────────────────────────────
+    async function start() {
+      // Step 1: get camera and mic
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true
+        });
+        showPreview(localStream);
+      } catch (err) {
+        document.getElementById('camPlaceholder').querySelector('.cam-text').textContent =
+          'Camera / mic denied or unavailable';
+        setStatus('Camera permission denied — check browser settings', 'error');
+        console.error('getUserMedia failed:', err);
+        return;
+      }
+
+      // Step 2: build peer connection and attach local tracks
+      pc = new RTCPeerConnection(CONFIG);
+      localStream.getTracks().forEach(function(track) {
+        pc.addTrack(track, localStream);
+      });
+
+      // No ontrack handler — participant.html is sender-only.
+      // Any incoming stream from the verifier is intentionally ignored.
+
+      pc.onicecandidate = function(event) {
+        if (event.candidate) {
+          socket.emit('ice-candidate', { room: ROOM, candidate: event.candidate });
+        }
+      };
+
+      pc.onconnectionstatechange = function() {
+        var state = pc.connectionState;
+        if (state === 'connected') {
+          setStatus('Streaming to verifier — you are live', 'live');
+        } else if (state === 'connecting') {
+          setStatus('Establishing connection\u2026', 'waiting');
+        } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+          setStatus('Disconnected from verifier', 'error');
+        }
+      };
+
+      // Step 3: join the signaling room
+      socket.emit('join', { room: ROOM });
+      setStatus('Waiting for verifier to join\u2026', 'waiting');
+    }
+
+    // ── Signaling handlers ───────────────────────────────────────────
+
+    socket.on('connect', function() {
+      // Socket connected — now safe to start camera + join room
+      start();
+    });
+
+    socket.on('connect_error', function(err) {
+      setStatus('Cannot reach signaling server — is app.py running?', 'error');
+      console.error('Socket connect error:', err);
+    });
+
+    // peer-joined fires when the verifier joins the room.
+    // participant.html NEVER creates the offer — it waits for one.
+    // The verifier (index.html) is always the offerer.
+    socket.on('peer-joined', function() {
+      setStatus('Verifier joined \u2014 waiting for connection offer\u2026', 'waiting');
+    });
+
+    // Verifier sends an offer → participant answers
+    socket.on('offer', async function(data) {
+      if (!pc) {
+        console.error('Received offer but RTCPeerConnection not ready');
+        return;
+      }
+      try {
+        await pc.setRemoteDescription(data.sdp);
+        var answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('answer', { room: ROOM, sdp: answer });
+        setStatus('Connection answer sent \u2014 connecting\u2026', 'waiting');
+      } catch (err) {
+        setStatus('Failed to create answer: ' + err.message, 'error');
+        console.error('Answer creation failed:', err);
+      }
+    });
+
+    // participant.html never creates an offer, so it should never
+    // receive an answer — but keep a no-op handler to avoid unhandled
+    // event warnings in the console.
+    socket.on('answer', function() {
+      console.warn('participant.html received an answer — this is unexpected');
+    });
+
+    socket.on('ice-candidate', async function(data) {
+      if (!pc) return;
+      try {
+        await pc.addIceCandidate(data.candidate);
+      } catch (err) {
+        console.error('ICE candidate error:', err);
+      }
+    });
+  </script>
+</body>
+</html>
