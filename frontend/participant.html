@@ -1,261 +1,277 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DeepfakeGuard — Participant</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <style>
-    :root {
-      --success: #18b96b;
-      --danger:  #ef4444;
-      --warning: #f59e0b;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, 'Inter', sans-serif;
-      background: #0b0f1a;
-      color: #e8edf8;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      gap: 20px;
-    }
-
-    /* Local camera preview */
-    #localPreview {
-      width: 360px;
-      max-width: 90vw;
-      aspect-ratio: 4/3;
-      border-radius: 14px;
-      border: 2px solid rgba(255,255,255,.12);
-      background: #04070f;
-      display: none; /* shown once stream is ready */
-      object-fit: cover;
-    }
-
-    /* Camera placeholder shown before getUserMedia resolves */
-    .cam-placeholder {
-      width: 360px;
-      max-width: 90vw;
-      aspect-ratio: 4/3;
-      border-radius: 14px;
-      border: 2px dashed rgba(255,255,255,.1);
-      background: #04070f;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 12px;
-      color: rgba(255,255,255,.3);
-    }
-    .cam-placeholder.hidden { display: none; }
-    .cam-icon {
-      font-size: 36px;
-      opacity: .4;
-    }
-    .cam-text {
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-    }
-
-    /* Status pill at the bottom */
-    #statusPill {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 18px;
-      background: rgba(255,255,255,.05);
-      border: 1px solid rgba(255,255,255,.1);
-      border-radius: 20px;
-      font-size: 13px;
-      font-weight: 600;
-    }
-    .dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      transition: background .3s, box-shadow .3s;
-    }
-    .dot.off      { background: rgba(255,255,255,.2); }
-    .dot.waiting  { background: var(--warning); box-shadow: 0 0 8px var(--warning); }
-    .dot.live     { background: var(--success); box-shadow: 0 0 8px var(--success); animation: pulse 2s infinite; }
-    .dot.error    { background: var(--danger);  box-shadow: 0 0 8px var(--danger); }
-    @keyframes pulse {
-      0%,100% { box-shadow: 0 0 8px var(--success); }
-      50%     { box-shadow: 0 0 16px var(--success); }
-    }
-
-    /* Small label above the preview */
-    .preview-label {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 1.2px;
-      text-transform: uppercase;
-      color: rgba(255,255,255,.3);
-    }
+    body { font-family: sans-serif; background: #0b0f1a; color: #e8edf8; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    #status { font-size: 14px; opacity: .75; margin-top: 16px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+    .dot.live { background: #18b96b; box-shadow: 0 0 8px #18b96b; }
+    .dot.off  { background: #ef4444; }
   </style>
 </head>
 <body>
+  <!-- ===== Consent Modal (Day 2) ===== -->
+  <div id="consentOverlay" role="dialog" aria-modal="true" aria-labelledby="consentTitle" style="
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(6, 8, 14, 0.97);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px; box-sizing: border-box;
+    font-family: sans-serif;
+  ">
+    <div id="consentBox" style="
+      max-width: 560px; width: 100%;
+      background: #12172a; border: 1px solid #232b45; border-radius: 12px;
+      padding: 32px; color: #e8edf8; box-sizing: border-box;
+    ">
+      <h2 id="consentTitle" style="margin: 0 0 16px; font-size: 20px;">Identity Verification — Consent Required</h2>
 
-  <!--
-    Sender-only page. Captures camera + mic and sends
-    the stream to the verifier (index.html) over WebRTC.
-    Does NOT display the remote stream — this is intentional.
-    The local preview below is purely so the participant
-    can confirm their camera is working before the call connects.
-  -->
+      <div id="consentStateInitial">
+        <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>What we collect:</strong><br>
+        &bull; A mathematical face embedding (not a photo)<br>
+        &bull; A voice embedding (not a recording)<br>
+        &bull; Video stream metadata for liveness verification</p>
 
-  <span class="preview-label">Your camera preview</span>
+        <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>Why:</strong> To verify your identity and detect deepfake impersonation in real time.</p>
 
-  <!-- shown once getUserMedia succeeds -->
-  <video id="localPreview" autoplay playsinline muted></video>
+        <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>How long we keep it:</strong> Session only. Embeddings are discarded when the session ends. Nothing is written to disk or sent to a server.</p>
 
-  <!-- shown while waiting for camera permission -->
-  <div class="cam-placeholder" id="camPlaceholder">
-    <div class="cam-icon">&#x1F4F7;</div>
-    <div class="cam-text">Requesting camera&hellip;</div>
+        <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>Your rights:</strong><br>
+        &bull; You may withdraw consent at any time by ending the session.<br>
+        &bull; You may request deletion of any session data.</p>
+
+        <div style="background: #1c2340; border-left: 3px solid #4f6bff; padding: 12px 14px; margin: 16px 0; font-size: 13px; line-height: 1.5; color: #c9d2ea;">
+          <strong>BIOMETRIC DATA NOTICE:</strong> We are collecting biometric identifiers (face and voice embeddings) to verify your identity and detect deepfake impersonation. This data will be retained only for the duration of this session and will be permanently deleted when the session ends. You may withdraw consent at any time by ending the session.
+        </div>
+
+        <p style="font-size: 12px; color: #7c88ab;">
+          <a href="./privacy-notice.html" target="_blank" rel="noopener" style="color: #8fa8ff;">Full Privacy Notice</a> &middot; Your Rights
+        </p>
+
+        <div style="display: flex; gap: 12px; margin-top: 20px;">
+          <button id="consentBtn" style="
+            flex: 1; padding: 12px 16px; border: none; border-radius: 8px;
+            background: #4f6bff; color: white; font-size: 14px; font-weight: 600;
+            cursor: pointer;
+          ">I consent to identity verification</button>
+          <button id="declineBtn" style="
+            padding: 12px 16px; border: 1px solid #3a4468; border-radius: 8px;
+            background: transparent; color: #b7c0d8; font-size: 14px;
+            cursor: pointer;
+          ">Decline</button>
+        </div>
+      </div>
+
+      <div id="consentStateInitializing" style="display: none; text-align: center; padding: 20px 0;">
+        <div style="width: 28px; height: 28px; border: 3px solid #2a3358; border-top-color: #4f6bff; border-radius: 50%; margin: 0 auto 16px; animation: consentSpin 0.8s linear infinite;"></div>
+        <p id="consentInitializingText" style="font-size: 14px; color: #b7c0d8;">Initializing camera&hellip;</p>
+      </div>
+
+      <div id="consentStateError" style="display: none;">
+        <p style="font-size: 14px; line-height: 1.5; color: #f2b8b8;">Camera access denied by your browser. Please enable permissions and refresh.</p>
+        <button id="consentRetryBtn" style="
+          margin-top: 12px; padding: 12px 16px; border: none; border-radius: 8px;
+          background: #4f6bff; color: white; font-size: 14px; font-weight: 600; cursor: pointer;
+        ">Retry</button>
+      </div>
+
+      <div id="consentStateDecline" style="display: none;">
+        <p style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">Identity verification required to proceed.</p>
+        <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;">
+          This service requires camera and microphone access to verify your identity and detect deepfake attempts in real time. Without consent, you cannot continue.
+        </p>
+        <button id="consentBackBtn" style="
+          margin-top: 16px; padding: 12px 16px; border: 1px solid #3a4468; border-radius: 8px;
+          background: transparent; color: #e8edf8; font-size: 14px; cursor: pointer;
+        ">Back</button>
+      </div>
+    </div>
   </div>
 
-  <div id="statusPill">
-    <span class="dot off" id="statusDot"></span>
-    <span id="statusText">Connecting to signaling server&hellip;</span>
-  </div>
+  <style>
+    @keyframes consentSpin { to { transform: rotate(360deg); } }
+    body.consent-pending { overflow: hidden; }
+  </style>
 
   <script>
-    var ROOM   = 'demo-room';
-    var CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  (function(){
+    window.consentGranted = false;
 
-    var socket = io(
-      window.location.hostname === 'localhost'
-        ? 'http://localhost:5000'
-        : 'http://' + window.location.hostname + ':5000'
-    );
+    var overlay      = document.getElementById('consentOverlay');
+    var stInitial     = document.getElementById('consentStateInitial');
+    var stInit        = document.getElementById('consentStateInitializing');
+    var stError       = document.getElementById('consentStateError');
+    var stDecline     = document.getElementById('consentStateDecline');
+    var consentBtn    = document.getElementById('consentBtn');
+    var declineBtn    = document.getElementById('declineBtn');
+    var backBtn       = document.getElementById('consentBackBtn');
+    var retryBtn      = document.getElementById('consentRetryBtn');
 
-    var pc, localStream;
+    var resolveConsent = null;
+    var focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
-    // ── UI helpers ───────────────────────────────────────────────────
-    function setStatus(text, state) {
-      // state: 'off' | 'waiting' | 'live' | 'error'
+    function showState(el){
+      [stInitial, stInit, stError, stDecline].forEach(function(s){ s.style.display = 'none'; });
+      el.style.display = 'block';
+    }
+
+    function trapFocus(e){
+      if (overlay.style.display === 'none') return;
+      if (e.key !== 'Tab') return;
+      var focusables = overlay.querySelectorAll(focusableSelector);
+      if (!focusables.length) return;
+      var first = focusables[0], last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', trapFocus);
+
+    function closeOverlay(){
+      overlay.style.display = 'none';
+      document.body.classList.remove('consent-pending');
+    }
+
+    window.requestConsent = function(){
+      return new Promise(function(resolve){
+        resolveConsent = resolve;
+        overlay.style.display = 'flex';
+        document.body.classList.add('consent-pending');
+        showState(stInitial);
+        consentBtn.focus();
+      });
+    };
+
+    consentBtn.addEventListener('click', async function(){
+      consentBtn.disabled = true;
+      declineBtn.disabled = true;
+      showState(stInit);
+
+      await new Promise(function(r){ requestAnimationFrame(function(){ requestAnimationFrame(r); }); });
+
+      window.consentGranted = true;
+      closeOverlay();
+      if (resolveConsent) resolveConsent(true);
+    });
+
+    declineBtn.addEventListener('click', function(){
+      showState(stDecline);
+      backBtn.focus();
+    });
+
+    backBtn.addEventListener('click', function(){
+      consentBtn.disabled = false;
+      declineBtn.disabled = false;
+      showState(stInitial);
+      consentBtn.focus();
+    });
+
+    window.showConsentError = function(){
+      overlay.style.display = 'flex';
+      document.body.classList.add('consent-pending');
+      showState(stError);
+      retryBtn.focus();
+    };
+
+    retryBtn.addEventListener('click', function(){
+      closeOverlay();
+      if (window.onConsentRetry) window.onConsentRetry();
+    });
+  })();
+  </script>
+  <!-- ===== End Consent Modal ===== -->
+
+  <!--
+    Sender-only page. This device captures camera/mic and SENDS the
+    stream to the verifier (index.html) over WebRTC. It never displays
+    its own or the remote video — there is intentionally no <video> tag
+    rendering any stream back to this user. That keeps this page
+    strictly a media source, which matches the "participant is being
+    watched, not watching themselves" trust model.
+  -->
+  <div id="status"><span class="dot off" id="statusDot"></span><span id="statusText">Connecting…</span></div>
+
+  <script>
+    const ROOM = "demo-room";
+    const socket = io(window.location.hostname === 'localhost'
+      ? 'http://localhost:5000'
+      : `http://${window.location.hostname}:5000`);
+    const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+    let pc, localStream;
+
+    function setStatus(text, live) {
       document.getElementById('statusText').textContent = text;
-      document.getElementById('statusDot').className = 'dot ' + (state || 'off');
+      document.getElementById('statusDot').className = 'dot ' + (live ? 'live' : 'off');
     }
 
-    function showPreview(stream) {
-      var video = document.getElementById('localPreview');
-      var placeholder = document.getElementById('camPlaceholder');
-      video.srcObject = stream;
-      video.onloadedmetadata = function () {
-        placeholder.classList.add('hidden');
-        video.style.display = 'block';
-      };
-    }
-
-    // ── Camera + peer connection ─────────────────────────────────────
     async function start() {
-      // Step 1: get camera and mic
+      await window.requestConsent();
+      window.onConsentRetry = start;
+
       try {
-        localStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true
-        });
-        showPreview(localStream);
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       } catch (err) {
-        document.getElementById('camPlaceholder').querySelector('.cam-text').textContent =
-          'Camera / mic denied or unavailable';
-        setStatus('Camera permission denied — check browser settings', 'error');
         console.error('getUserMedia failed:', err);
+        setStatus('Camera/mic permission denied or unavailable', false);
+        window.showConsentError();
         return;
       }
 
-      // Step 2: build peer connection and attach local tracks
-      pc = new RTCPeerConnection(CONFIG);
-      localStream.getTracks().forEach(function(track) {
-        pc.addTrack(track, localStream);
-      });
+      pc = new RTCPeerConnection(config);
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-      // No ontrack handler — participant.html is sender-only.
-      // Any incoming stream from the verifier is intentionally ignored.
+      // No ontrack handler — this page does not render any incoming
+      // stream. It only sends. (If the verifier side ever needs a
+      // two-way call, that behavior belongs in a different page, not
+      // here — this page's contract is sender-only.)
 
-      pc.onicecandidate = function(event) {
+      pc.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit('ice-candidate', { room: ROOM, candidate: event.candidate });
         }
       };
 
-      pc.onconnectionstatechange = function() {
-        var state = pc.connectionState;
-        if (state === 'connected') {
-          setStatus('Streaming to verifier — you are live', 'live');
-        } else if (state === 'connecting') {
-          setStatus('Establishing connection\u2026', 'waiting');
-        } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-          setStatus('Disconnected from verifier', 'error');
-        }
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') setStatus('Streaming to verifier', true);
+        else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) setStatus('Disconnected', false);
       };
 
-      // Step 3: join the signaling room
       socket.emit('join', { room: ROOM });
-      setStatus('Waiting for verifier to join\u2026', 'waiting');
+      setStatus('Waiting for verifier to join...', false);
     }
 
-    // ── Signaling handlers ───────────────────────────────────────────
-
-    socket.on('connect', function() {
-      // Socket connected — now safe to start camera + join room
-      start();
+    socket.on('peer-joined', () => {
+      // participant.html never initiates the offer — it just waits for
+      // the verifier (index.html) to send one. This removes the race
+      // condition where both sides tried to create an offer depending
+      // on which page happened to join the room first.
+      setStatus('Verifier joined — waiting for connection offer', false);
     });
 
-    socket.on('connect_error', function(err) {
-      setStatus('Cannot reach signaling server — is app.py running?', 'error');
-      console.error('Socket connect error:', err);
+    socket.on('offer', async (data) => {
+      await pc.setRemoteDescription(data.sdp);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('answer', { room: ROOM, sdp: answer });
     });
 
-    // peer-joined fires when the verifier joins the room.
-    // participant.html NEVER creates the offer — it waits for one.
-    // The verifier (index.html) is always the offerer.
-    socket.on('peer-joined', function() {
-      setStatus('Verifier joined \u2014 waiting for connection offer\u2026', 'waiting');
+    socket.on('answer', async (data) => {
+      await pc.setRemoteDescription(data.sdp);
     });
 
-    // Verifier sends an offer → participant answers
-    socket.on('offer', async function(data) {
-      if (!pc) {
-        console.error('Received offer but RTCPeerConnection not ready');
-        return;
-      }
-      try {
-        await pc.setRemoteDescription(data.sdp);
-        var answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit('answer', { room: ROOM, sdp: answer });
-        setStatus('Connection answer sent \u2014 connecting\u2026', 'waiting');
-      } catch (err) {
-        setStatus('Failed to create answer: ' + err.message, 'error');
-        console.error('Answer creation failed:', err);
-      }
-    });
-
-    // participant.html never creates an offer, so it should never
-    // receive an answer — but keep a no-op handler to avoid unhandled
-    // event warnings in the console.
-    socket.on('answer', function() {
-      console.warn('participant.html received an answer — this is unexpected');
-    });
-
-    socket.on('ice-candidate', async function(data) {
-      if (!pc) return;
+    socket.on('ice-candidate', async (data) => {
       try {
         await pc.addIceCandidate(data.candidate);
       } catch (err) {
-        console.error('ICE candidate error:', err);
+        console.error("ICE candidate error:", err);
       }
     });
+
+    start();
   </script>
 </body>
 </html>

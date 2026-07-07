@@ -104,7 +104,7 @@
         .score-ring-container svg{transform:rotate(-90deg);width:88px;height:88px;}
         .ring-bg{fill:none;stroke:var(--border);stroke-width:7;}
         .ring-fill{fill:none;stroke-width:7;stroke-linecap:round;stroke-dasharray:226;transition:stroke-dashoffset .8s cubic-bezier(.4,0,.2,1),stroke .4s;}
-        .ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:22px;font-weight:800;line-height:1;transition:color .4s;border-radius:50%;}
+        .ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:22px;font-weight:800;line-height:1;transition:color .4s;cursor:pointer;border-radius:50%;}
         .ring-label small{font-size:9px;font-weight:600;color:var(--text-muted);margin-top:2px;}
         .score-segments{flex:1;display:flex;flex-direction:column;gap:9px;}
         .segment-bar{display:flex;align-items:center;gap:10px;}
@@ -155,6 +155,184 @@
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
+<!-- ===== Consent Acknowledgment Modal (Day 2) ===== -->
+<div id="consentOverlay" role="dialog" aria-modal="true" aria-labelledby="consentTitle" style="
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(6, 8, 14, 0.97);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; box-sizing: border-box;
+  font-family: sans-serif;
+">
+  <div id="consentBox" style="
+    max-width: 560px; width: 100%;
+    background: #12172a; border: 1px solid #232b45; border-radius: 12px;
+    padding: 32px; color: #e8edf8; box-sizing: border-box;
+  ">
+    <h2 id="consentTitle" style="margin: 0 0 16px; font-size: 20px;">Verifier Acknowledgment Required</h2>
+
+    <div id="consentStateInitial">
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;">
+        You are about to view a live biometric verification session. The participant's
+        video is processed into a face embedding, and their audio into a voice
+        embedding, for identity and deepfake-detection purposes only.
+      </p>
+
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>What this session involves:</strong><br>
+      &bull; A mathematical face embedding of the participant (not a photo)<br>
+      &bull; A voice embedding of the participant (not a recording)<br>
+      &bull; Video stream metadata for liveness verification</p>
+
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>How long data is kept:</strong> Session only. Embeddings are discarded when the session ends. Nothing is written to disk or sent to a server.</p>
+
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>Your responsibility as verifier:</strong><br>
+      &bull; Use this session only for its stated identity-verification purpose.<br>
+      &bull; End the session promptly once verification is complete.</p>
+
+      <div style="background: #1c2340; border-left: 3px solid #4f6bff; padding: 12px 14px; margin: 16px 0; font-size: 13px; line-height: 1.5; color: #c9d2ea;">
+        <strong>BIOMETRIC DATA NOTICE:</strong> This session involves biometric identifiers (face and voice embeddings) belonging to another individual, collected to verify their identity and detect deepfake impersonation. This data will be retained only for the duration of this session and will be permanently deleted when the session ends.
+      </div>
+
+      <p style="font-size: 12px; color: #7c88ab;">
+        <a href="./privacy-notice.html" target="_blank" rel="noopener" style="color: #8fa8ff;">Full Privacy Notice</a> &middot; Your Rights
+      </p>
+
+      <div style="display: flex; gap: 12px; margin-top: 20px;">
+        <button id="consentBtn" style="
+          flex: 1; padding: 12px 16px; border: none; border-radius: 8px;
+          background: #4f6bff; color: white; font-size: 14px; font-weight: 600;
+          cursor: pointer;
+        ">I acknowledge and agree to proceed</button>
+        <button id="declineBtn" style="
+          padding: 12px 16px; border: 1px solid #3a4468; border-radius: 8px;
+          background: transparent; color: #b7c0d8; font-size: 14px;
+          cursor: pointer;
+        ">Decline</button>
+      </div>
+    </div>
+
+    <div id="consentStateInitializing" style="display: none; text-align: center; padding: 20px 0;">
+      <div style="width: 28px; height: 28px; border: 3px solid #2a3358; border-top-color: #4f6bff; border-radius: 50%; margin: 0 auto 16px; animation: consentSpin 0.8s linear infinite;"></div>
+      <p style="font-size: 14px; color: #b7c0d8;">Connecting to session&hellip;</p>
+    </div>
+
+    <div id="consentStateError" style="display: none;">
+      <p style="font-size: 14px; line-height: 1.5; color: #f2b8b8;">Unable to start the session. Please refresh and try again.</p>
+      <button id="consentRetryBtn" style="
+        margin-top: 12px; padding: 12px 16px; border: none; border-radius: 8px;
+        background: #4f6bff; color: white; font-size: 14px; font-weight: 600; cursor: pointer;
+      ">Retry</button>
+    </div>
+
+    <div id="consentStateDecline" style="display: none;">
+      <p style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">Acknowledgment required to proceed.</p>
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;">
+        Viewing this verification session requires acknowledging how the participant's
+        biometric data is used. Without acknowledgment, you cannot continue.
+      </p>
+      <button id="consentBackBtn" style="
+        margin-top: 16px; padding: 12px 16px; border: 1px solid #3a4468; border-radius: 8px;
+        background: transparent; color: #e8edf8; font-size: 14px; cursor: pointer;
+      ">Back</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  @keyframes consentSpin { to { transform: rotate(360deg); } }
+  body.consent-pending { overflow: hidden; }
+</style>
+
+<script>
+(function(){
+  window.consentGranted = false;
+
+  var overlay      = document.getElementById('consentOverlay');
+  var stInitial     = document.getElementById('consentStateInitial');
+  var stInit        = document.getElementById('consentStateInitializing');
+  var stError       = document.getElementById('consentStateError');
+  var stDecline     = document.getElementById('consentStateDecline');
+  var consentBtn    = document.getElementById('consentBtn');
+  var declineBtn    = document.getElementById('declineBtn');
+  var backBtn       = document.getElementById('consentBackBtn');
+  var retryBtn      = document.getElementById('consentRetryBtn');
+
+  var resolveConsent = null;
+  var focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  function showState(el){
+    [stInitial, stInit, stError, stDecline].forEach(function(s){ s.style.display = 'none'; });
+    el.style.display = 'block';
+  }
+
+  function trapFocus(e){
+    if (overlay.style.display === 'none') return;
+    if (e.key !== 'Tab') return;
+    var focusables = overlay.querySelectorAll(focusableSelector);
+    if (!focusables.length) return;
+    var first = focusables[0], last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
+  }
+
+  document.addEventListener('keydown', trapFocus);
+
+  function closeOverlay(){
+    overlay.style.display = 'none';
+    document.body.classList.remove('consent-pending');
+  }
+
+  window.requestConsent = function(){
+    return new Promise(function(resolve){
+      resolveConsent = resolve;
+      overlay.style.display = 'flex';
+      document.body.classList.add('consent-pending');
+      showState(stInitial);
+      consentBtn.focus();
+    });
+  };
+
+  consentBtn.addEventListener('click', async function(){
+    consentBtn.disabled = true;
+    declineBtn.disabled = true;
+    showState(stInit);
+
+    await new Promise(function(r){ requestAnimationFrame(function(){ requestAnimationFrame(r); }); });
+
+    window.consentGranted = true;
+    closeOverlay();
+    if (resolveConsent) resolveConsent(true);
+  });
+
+  declineBtn.addEventListener('click', function(){
+    showState(stDecline);
+    backBtn.focus();
+  });
+
+  backBtn.addEventListener('click', function(){
+    consentBtn.disabled = false;
+    declineBtn.disabled = false;
+    showState(stInitial);
+    consentBtn.focus();
+  });
+
+  window.showConsentError = function(){
+    overlay.style.display = 'flex';
+    document.body.classList.add('consent-pending');
+    showState(stError);
+    retryBtn.focus();
+  };
+
+  retryBtn.addEventListener('click', function(){
+    closeOverlay();
+    if (window.onConsentRetry) window.onConsentRetry();
+  });
+})();
+</script>
+<!-- ===== End Consent Modal ===== -->
+
 <div id="srStatus" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 <header class="header">
     <div class="header-left">
@@ -180,12 +358,12 @@
             <video class="video-el" id="remoteVideo" autoplay playsinline></video>
             <div class="video-placeholder">
                 <div class="video-icon-ring" aria-hidden="true">&#x1F4F9;</div>
-                <div class="video-label-main" id="videoLabel">Waiting for participant to join&hellip;</div>
+                <div class="video-label-main">Waiting for participant stream&hellip;</div>
             </div>
             <div class="video-badge"><span class="dot" aria-hidden="true"></span> LIVE</div>
             <button class="pip-toggle-btn" id="pipToggleBtn" aria-label="Toggle picture-in-picture window" onclick="togglePip()">&#x229E; PiP</button>
             <div class="pip-window" id="pipWindow">
-                <video class="pip-video" id="pipVideo" autoplay playsinline muted></video>
+                <video class="pip-video" id="pipVideo" autoplay playsinline></video>
                 <div class="pip-header-bar">
                     <span class="pip-title" id="pipTitle">Top View</span>
                     <button class="pip-close" aria-label="Close picture-in-picture window" onclick="togglePip()">&#x2715;</button>
@@ -206,16 +384,16 @@
             <div class="trust-score-band">
                 <div class="trust-header">
                     <h2 class="trust-title">Overall Trust Score</h2>
-                    <span class="trust-status status-suspicious" id="trustStatus">Awaiting</span>
+                    <span class="trust-status status-suspicious" id="trustStatus">Suspicious</span>
                 </div>
                 <div class="score-gauge">
                     <div class="score-ring-container">
                         <svg viewBox="0 0 88 88" role="img" aria-hidden="true">
                             <circle class="ring-bg" cx="44" cy="44" r="36"/>
-                            <circle class="ring-fill" cx="44" cy="44" r="36" id="ringFill" stroke="var(--border)" style="stroke-dashoffset:226"/>
+                            <circle class="ring-fill" cx="44" cy="44" r="36" id="ringFill" stroke="var(--warning)" style="stroke-dashoffset:63.28"/>
                         </svg>
                         <div class="ring-label" id="ringLabel" aria-hidden="true">
-                            <span id="trustScore">--</span>
+                            <span id="trustScore">72</span>
                             <small>/100</small>
                         </div>
                     </div>
@@ -227,8 +405,8 @@
                         </div>
                         <div class="segment-bar">
                             <span class="segment-label">Suspicious</span>
-                            <div class="segment-track"><div class="segment-fill fill-suspicious" id="segSuspicious" style="width:0%"></div></div>
-                            <span class="segment-pct" id="pctSuspicious">&mdash;</span>
+                            <div class="segment-track"><div class="segment-fill fill-suspicious" id="segSuspicious" style="width:72%"></div></div>
+                            <span class="segment-pct" id="pctSuspicious">72%</span>
                         </div>
                         <div class="segment-bar">
                             <span class="segment-label">Fraud</span>
@@ -238,49 +416,49 @@
                     </div>
                 </div>
                 <div class="trust-gradient-bar">
-                    <div class="trust-gradient-needle" id="trustNeedle" style="left:50%"></div>
+                    <div class="trust-gradient-needle" id="trustNeedle" style="left:72%"></div>
                 </div>
                 <div class="trust-bar-labels"><span>Fraud</span><span>Suspicious</span><span>Trusted</span></div>
                 <div class="reason-area" id="reasonArea">
-                    <span class="reason-icon" id="reasonIcon" aria-hidden="true">&#x23F3;</span>
-                    <span id="reasonText">Awaiting signals &mdash; no modules have reported yet.</span>
+                    <span class="reason-icon" id="reasonIcon" aria-hidden="true">&#x26A0;&#xFE0F;</span>
+                    <span id="reasonText">Score reduced due to elevated injection-risk signal and anomalous audio patterns detected in frequency analysis.</span>
                 </div>
-                <button class="cycle-btn" id="cycleBtn">Send test payload to backend &rarr;</button>
+                <button class="cycle-btn" id="cycleBtn">Cycle test scenario &rarr; (showing simulated data)</button>
             </div>
             <div class="scores-grid">
-                <div class="score-panel panel-warn">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Identity</h3><span class="score-chip chip-warn" id="chip0">Pending</span></div>
-                    <div class="score-panel-value" id="val0">&mdash;</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:0%"></div></div>
-                    <div class="score-panel-footer" id="foot0">Awaiting identity module&hellip;</div>
+                <div class="score-panel panel-good">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Identity</h3><span class="score-chip chip-good" id="chip0">Pass</span></div>
+                    <div class="score-panel-value val-good" id="val0">92</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:92%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
+                    <div class="score-panel-footer" id="foot0">ID document verified</div>
+                </div>
+                <div class="score-panel panel-good">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-good" id="chip1">Pass</span></div>
+                    <div class="score-panel-value val-good" id="val1">88</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:88%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
+                    <div class="score-panel-footer" id="foot1">Challenge passed</div>
                 </div>
                 <div class="score-panel panel-warn">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-warn" id="chip1">Pending</span></div>
-                    <div class="score-panel-value" id="val1">&mdash;</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:0%"></div></div>
-                    <div class="score-panel-footer" id="foot1">Awaiting liveness module&hellip;</div>
+                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-warn" id="chip2">Review</span></div>
+                    <div class="score-panel-value val-warn" id="val2">65</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:65%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
+                    <div class="score-panel-footer" id="foot2">Minor artifacts detected</div>
                 </div>
                 <div class="score-panel panel-warn">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-warn" id="chip2">Pending</span></div>
-                    <div class="score-panel-value" id="val2">&mdash;</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:0%"></div></div>
-                    <div class="score-panel-footer" id="foot2">Awaiting visual deepfake module&hellip;</div>
+                    <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-warn" id="chip3">Review</span></div>
+                    <div class="score-panel-value val-warn" id="val3">78</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:78%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
+                    <div class="score-panel-footer" id="foot3">Slight frequency anomaly</div>
                 </div>
-                <div class="score-panel panel-warn">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-warn" id="chip3">Pending</span></div>
-                    <div class="score-panel-value" id="val3">&mdash;</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:0%"></div></div>
-                    <div class="score-panel-footer" id="foot3">Awaiting audio deepfake module&hellip;</div>
-                </div>
-                <div class="score-panel panel-warn panel-injection">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-warn" id="chip4">Pending</span></div>
-                    <div class="score-panel-value" id="val4">&mdash;</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar4" style="width:0%"></div></div>
-                    <div class="score-panel-footer" id="foot4">Awaiting security module&hellip;</div>
+                <div class="score-panel panel-bad panel-injection">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-bad" id="chip4">Alert</span></div>
+                    <div class="score-panel-value val-bad" id="val4">45</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar4" style="width:45%;background:linear-gradient(90deg,var(--danger),#f87171)"></div></div>
+                    <div class="score-panel-footer" id="foot4">Unusual frame timing &mdash; possible replay attack</div>
                     <div class="injection-detail">
-                        <div class="injection-stat"><div class="injection-stat-label">Frame timing deviation</div><div class="injection-stat-value" id="injTiming">&mdash;</div></div>
-                        <div class="injection-stat"><div class="injection-stat-label">Virtual camera</div><div class="injection-stat-value" id="injVirtual">&mdash;</div></div>
-                        <div class="injection-stat"><div class="injection-stat-label">Verdict</div><div class="injection-stat-value" id="injVerdict">&mdash;</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Frame timing deviation</div><div class="injection-stat-value" style="color:var(--danger)">+340ms anomaly</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Replay confidence</div><div class="injection-stat-value" style="color:var(--warning)">64%</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Signal type</div><div class="injection-stat-value">Frame injection</div></div>
                     </div>
                 </div>
             </div>
@@ -289,19 +467,11 @@
 </main>
 <div class="device-indicator" id="deviceIndicator">Viewport &middot; Desktop</div>
 <script>
-    // ── Session ID generated once at boot, never regenerated ──────────
-    var SESSION_ID = (function(){
-        var d = new Date();
-        var ymd = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
-        var rand = Math.random().toString(16).slice(2,6).toUpperCase();
-        return 'VFY-' + ymd + '-' + rand;
-    })();
-
-    var darkMode = false, currentLayout = 'split', pipVisible = true, timerSeconds = 0;
+    var darkMode = false, currentLayout = 'split', pipVisible = true, timerSeconds = 0, scenarioIdx = 1;
 
     function toggleTheme(){
         darkMode = !darkMode;
-        if (darkMode) { document.body.setAttribute('data-theme','dark'); }
+        if (darkMode) { document.body.setAttribute('data-theme', 'dark'); }
         else { document.body.removeAttribute('data-theme'); }
         var btn = document.getElementById('btnTheme');
         btn.textContent = darkMode ? '\u2600\uFE0F Light' : '\uD83C\uDF19 Dark';
@@ -347,10 +517,12 @@
 
     function swapToLayout(){ setLayout(currentLayout === 'split' ? 'stack' : 'split'); }
 
-    // PiP drag — Pointer Events covers mouse, touch, and pen in one set
+    // Picture-in-picture dragging via Pointer Events, which covers
+    // mouse, touch, and pen with one set of listeners.
     (function(){
         var pip = document.getElementById('pipWindow');
         var dragging = false, startX, startY, startLeft, startTop;
+
         pip.addEventListener('pointerdown', function(e){
             if (e.target.closest('button')) return;
             dragging = true;
@@ -360,18 +532,22 @@
             pip.style.right = 'auto';
             pip.style.bottom = 'auto';
             startLeft = r.left - pr.left;
-            startTop  = r.top  - pr.top;
+            startTop = r.top - pr.top;
             pip.style.left = startLeft + 'px';
-            pip.style.top  = startTop  + 'px';
+            pip.style.top = startTop + 'px';
             startX = e.clientX;
             startY = e.clientY;
             pip.style.cursor = 'grabbing';
         });
+
         pip.addEventListener('pointermove', function(e){
             if (!dragging) return;
-            pip.style.left = (startLeft + e.clientX - startX) + 'px';
-            pip.style.top  = (startTop  + e.clientY - startY) + 'px';
+            var dx = e.clientX - startX;
+            var dy = e.clientY - startY;
+            pip.style.left = (startLeft + dx) + 'px';
+            pip.style.top = (startTop + dy) + 'px';
         });
+
         function endDrag(e){
             if (!dragging) return;
             dragging = false;
@@ -384,10 +560,128 @@
 
     setInterval(function(){
         timerSeconds++;
-        var m = String(Math.floor(timerSeconds/60)).padStart(2,'0');
-        var s = String(timerSeconds%60).padStart(2,'0');
-        document.getElementById('sessionTimer').textContent = m+':'+s;
+        var m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+        var s = String(timerSeconds % 60).padStart(2, '0');
+        document.getElementById('sessionTimer').textContent = m + ':' + s;
     }, 1000);
+
+    var TIER_STYLES = {
+        good: { chipCls: 'chip-good', panelCls: 'panel-good', valCls: 'val-good', bar: 'linear-gradient(90deg,var(--success),#4ade80)' },
+        warn: { chipCls: 'chip-warn', panelCls: 'panel-warn', valCls: 'val-warn', bar: 'linear-gradient(90deg,var(--warning),#fbbf24)' },
+        bad:  { chipCls: 'chip-bad',  panelCls: 'panel-bad',  valCls: 'val-bad',  bar: 'linear-gradient(90deg,var(--danger),#f87171)' }
+    };
+
+    // Each scenario's signals are one object per panel, in fixed
+    // display order: identity, liveness, visual deepfake, audio
+    // deepfake, injection risk. This replaces the old design of six
+    // separate parallel arrays that had to be kept in sync by hand.
+    var mockScenarios = [
+        {
+            trust: 92, status: 'Trusted', statusClass: 'status-trusted', ringColor: 'var(--success)',
+            reasonIcon: 'OK', reasonBorder: 'var(--success)',
+            reason: 'All signals within normal thresholds. Biometric match confirmed with high confidence.',
+            signals: [
+                { tier: 'good', score: 95, chip: 'Pass', footer: 'ID document verified' },
+                { tier: 'good', score: 94, chip: 'Pass', footer: 'Challenge passed' },
+                { tier: 'good', score: 90, chip: 'Pass', footer: 'No artifacts found' },
+                { tier: 'good', score: 93, chip: 'Pass', footer: 'Voice pattern matched' },
+                { tier: 'good', score: 88, chip: 'Pass', footer: 'No anomalies detected' }
+            ]
+        },
+        {
+            trust: 72, status: 'Suspicious', statusClass: 'status-suspicious', ringColor: 'var(--warning)',
+            reasonIcon: 'WARN', reasonBorder: 'var(--warning)',
+            reason: 'Score reduced due to elevated injection-risk signal and anomalous audio patterns detected in frequency analysis.',
+            signals: [
+                { tier: 'good', score: 92, chip: 'Pass', footer: 'ID document verified' },
+                { tier: 'good', score: 88, chip: 'Pass', footer: 'Challenge passed' },
+                { tier: 'warn', score: 65, chip: 'Review', footer: 'Minor artifacts detected' },
+                { tier: 'warn', score: 78, chip: 'Review', footer: 'Slight frequency anomaly' },
+                { tier: 'bad', score: 45, chip: 'Alert', footer: 'Unusual frame timing \u2014 possible replay attack' }
+            ]
+        },
+        {
+            trust: 34, status: 'Potential fraud', statusClass: 'status-fraud', ringColor: 'var(--danger)',
+            reasonIcon: 'ERR', reasonBorder: 'var(--danger)',
+            reason: 'Multiple critical alerts: deepfake artifacts confirmed in both visual and audio streams. Session flagged for termination.',
+            signals: [
+                { tier: 'bad', score: 40, chip: 'Fail', footer: 'Identity mismatch detected' },
+                { tier: 'bad', score: 35, chip: 'Fail', footer: 'Liveness challenge failed' },
+                { tier: 'bad', score: 22, chip: 'Fail', footer: 'Deepfake artifacts confirmed' },
+                { tier: 'bad', score: 28, chip: 'Fail', footer: 'Synthetic voice detected' },
+                { tier: 'bad', score: 15, chip: 'Critical', footer: 'Active injection attempt detected' }
+            ]
+        }
+    ];
+
+    function updateScreenReaderStatus(s){
+        document.getElementById('srStatus').textContent =
+            'Trust score ' + s.trust + ' out of 100, ' + s.status + '. ' + s.reason;
+    }
+
+    function applyScenario(idx){
+        var s = mockScenarios[idx], t = s.trust, circ = 226;
+
+        document.getElementById('ringFill').style.strokeDashoffset = circ - (t / 100) * circ;
+        document.getElementById('ringFill').style.stroke = s.ringColor;
+        document.getElementById('trustScore').textContent = t;
+        document.getElementById('ringLabel').style.color = s.ringColor;
+
+        var statusEl = document.getElementById('trustStatus');
+        statusEl.textContent = s.status;
+        statusEl.className = 'trust-status ' + s.statusClass;
+
+        document.getElementById('trustNeedle').style.left = t + '%';
+
+        var tW = '0%', sW = '0%', fW = '0%', tP = '\u2014', sP = '\u2014', fP = '\u2014';
+        if (t >= 80) { tW = ((t - 80) / 20 * 100) + '%'; tP = t + '%'; }
+        else if (t >= 50) { sW = ((t - 50) / 30 * 100) + '%'; sP = t + '%'; }
+        else { fW = ((50 - t) / 50 * 100) + '%'; fP = (100 - t * 2) + '%'; }
+
+        document.getElementById('segTrusted').style.width = tW;
+        document.getElementById('segSuspicious').style.width = sW;
+        document.getElementById('segFraud').style.width = fW;
+        document.getElementById('pctTrusted').textContent = tP;
+        document.getElementById('pctSuspicious').textContent = sP;
+        document.getElementById('pctFraud').textContent = fP;
+
+        var icons = { OK: '\u2705', WARN: '\u26A0\uFE0F', ERR: '\uD83D\uDEA8' };
+        document.getElementById('reasonIcon').textContent = icons[s.reasonIcon] + ' ';
+        document.getElementById('reasonText').textContent = s.reason;
+        document.getElementById('reasonArea').style.borderLeftColor = s.reasonBorder;
+
+        var panels = document.querySelectorAll('.score-panel');
+        s.signals.forEach(function(sig, i){
+            var tier = TIER_STYLES[sig.tier];
+            var panel = panels[i];
+
+            panel.classList.remove('panel-good', 'panel-warn', 'panel-bad');
+            panel.classList.add(tier.panelCls);
+
+            var valEl = document.getElementById('val' + i);
+            valEl.textContent = sig.score;
+            valEl.className = 'score-panel-value ' + tier.valCls;
+
+            var barEl = document.getElementById('bar' + i);
+            barEl.style.width = sig.score + '%';
+            barEl.style.background = tier.bar;
+
+            var chipEl = document.getElementById('chip' + i);
+            chipEl.textContent = sig.chip;
+            chipEl.className = 'score-chip ' + tier.chipCls;
+
+            document.getElementById('foot' + i).textContent = sig.footer;
+        });
+
+        updateScreenReaderStatus(s);
+    }
+
+    function generateSessionId(){
+        var d = new Date();
+        var ymd = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+        var rand = Math.random().toString(16).slice(2, 6).toUpperCase();
+        return 'VFY-' + ymd + '-' + rand;
+    }
 
     function updateViewportLabel(){
         var w = window.innerWidth;
@@ -396,22 +690,22 @@
     }
     window.addEventListener('resize', updateViewportLabel);
 
-    // ── WebRTC — verifier (receive-only) side ─────────────────────────
-    // This page does NOT call getUserMedia. It joins the signaling room
-    // and waits for the participant's stream. The two addTransceiver
-    // calls are critical: without them createOffer() generates an empty
-    // SDP with no media sections, and nothing ever flows.
-    var RTC_ROOM = 'demo-room';
+    // ── Receive the PEER'S stream via WebRTC ─────
+    // index.html is the verifier's dashboard. It does not open its own
+    // camera; it joins the same signaling room as participant.html and
+    // displays whatever stream arrives on ontrack. This device is
+    // receive-only: it never calls getUserMedia() and never sends media.
+    const RTC_ROOM = "demo-room";
     var rtcSocket, rtcPc;
-    var RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    var RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
     function joinAsVerifier(){
         var video = document.getElementById('remoteVideo');
         var panel = document.getElementById('videoPanel');
-        var label = document.getElementById('videoLabel');
+        var label = panel.querySelector('.video-label-main');
 
         if (typeof io === 'undefined') {
-            label.textContent = 'Signaling library failed to load';
+            if (label) label.textContent = 'Signaling library failed to load';
             return;
         }
 
@@ -421,18 +715,13 @@
 
         rtcPc = new RTCPeerConnection(RTC_CONFIG);
 
-        // FIX: declare receive-only transceivers BEFORE creating the
-        // offer so the SDP contains video + audio m-sections. Without
-        // this the offer is empty and no stream can flow.
-        rtcPc.addTransceiver('video', { direction: 'recvonly' });
-        rtcPc.addTransceiver('audio', { direction: 'recvonly' });
-
+        // This is the only place this page touches media: receiving the
+        // remote participant's tracks and attaching them to the main
+        // video element (and mirroring into the PiP window via the
+        // existing attachPipStream hook, if in use).
         rtcPc.ontrack = function(event){
             video.srcObject = event.streams[0];
-            video.onloadedmetadata = function(){
-                panel.classList.add('stream-active');
-                label.textContent = 'Participant stream live';
-            };
+            video.onloadedmetadata = function(){ panel.classList.add('stream-active'); };
         };
 
         rtcPc.onicecandidate = function(event){
@@ -441,22 +730,19 @@
             }
         };
 
-        rtcPc.onconnectionstatechange = function(){
-            if (rtcPc.connectionState === 'disconnected' ||
-                rtcPc.connectionState === 'failed' ||
-                rtcPc.connectionState === 'closed') {
-                panel.classList.remove('stream-active');
-                label.textContent = 'Participant disconnected';
-            }
-        };
-
-        // peer-joined fires when the OTHER person joins (handled by
-        // backend). The verifier always makes the offer.
         rtcSocket.on('peer-joined', async function(){
-            label.textContent = 'Participant joined \u2014 connecting\u2026';
+            // index.html (the verifier) is always the offerer, regardless
+            // of which page happened to join the signaling room first.
             var offer = await rtcPc.createOffer();
             await rtcPc.setLocalDescription(offer);
             rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
+        });
+
+        rtcSocket.on('offer', async function(data){
+            await rtcPc.setRemoteDescription(data.sdp);
+            var answer = await rtcPc.createAnswer();
+            await rtcPc.setLocalDescription(answer);
+            rtcSocket.emit('answer', { room: RTC_ROOM, sdp: answer });
         });
 
         rtcSocket.on('answer', async function(data){
@@ -464,192 +750,203 @@
         });
 
         rtcSocket.on('ice-candidate', async function(data){
-            try { await rtcPc.addIceCandidate(data.candidate); }
-            catch(err){ console.error('ICE error:', err); }
+            try {
+                await rtcPc.addIceCandidate(data.candidate);
+            } catch (err) {
+                console.error('ICE candidate error:', err);
+            }
         });
 
         rtcSocket.emit('join', { room: RTC_ROOM });
-        label.textContent = 'Waiting for participant to join\u2026';
+        if (label) label.textContent = 'Waiting for participant to join...';
     }
 
-    // ── Live backend polling ──────────────────────────────────────────
-    var TIER_STYLES = {
-        good: { chipCls:'chip-good', panelCls:'panel-good', valCls:'val-good', bar:'linear-gradient(90deg,var(--success),#4ade80)', chip:'Pass'   },
-        warn: { chipCls:'chip-warn', panelCls:'panel-warn', valCls:'val-warn', bar:'linear-gradient(90deg,var(--warning),#fbbf24)', chip:'Review' },
-        bad:  { chipCls:'chip-bad',  panelCls:'panel-bad',  valCls:'val-bad',  bar:'linear-gradient(90deg,var(--danger),#f87171)',  chip:'Alert'  }
-    };
+    // Hook for the Day 2 WebRTC signaling page (call.html): once your
+    // RTCPeerConnection's ontrack handler gives you the remote peer's
+    // MediaStream, call window.attachPipStream(stream) from there to
+    // show it in the picture-in-picture window.
+    function attachPipStream(stream){
+        var video = document.getElementById('pipVideo');
+        var win = document.getElementById('pipWindow');
+        video.srcObject = stream;
+        video.onloadedmetadata = function(){ win.classList.add('stream-active'); };
+    }
+    window.attachPipStream = attachPipStream;
 
-    var PANELS = [
-        { id:0, label:'Identity',        field:'identity_score',        tierKey:'identity'        },
-        { id:1, label:'Liveness',        field:'liveness_score',        tierKey:'liveness'        },
-        { id:2, label:'Visual deepfake', field:'visual_deepfake_score', tierKey:'visual_deepfake' },
-        { id:3, label:'Audio deepfake',  field:'audio_deepfake_score',  tierKey:'audio_deepfake'  },
-        { id:4, label:'Injection risk',  field:'injection_risk_score',  tierKey:'injection_risk'  }
+// ─────────────────────────────────────────────
+// Live polling — replaces mock scenario cycling.
+// Fetches real signal data from Flask backend
+// every 1.5 seconds and updates the dashboard.
+// ─────────────────────────────────────────────
+async function fetchLiveScores() {
+    try {
+        const res = await fetch('http://localhost:5000/scores');
+        if (!res.ok) throw new Error('Backend returned ' + res.status);
+        const data = await res.json();
+        applyLiveData(data);
+    } catch (err) {
+        // Backend unreachable — show a warning state
+        // but don't crash the dashboard
+        document.getElementById('reasonText').textContent =
+            'Cannot reach backend at localhost:5000 — is app.py running?';
+        document.getElementById('reasonArea').style.borderLeftColor = 'var(--danger)';
+    }
+}
+
+function applyLiveData(data) {
+    // ── Trust score + band ──────────────────────
+    const trust = data.trust_score;
+    const band  = data.trust_band;  // "trusted" | "suspicious" | "fraud"
+
+    if (trust === null || trust === undefined) {
+        document.getElementById('reasonText').textContent =
+            'Awaiting signals — no modules have reported yet.';
+        return;
+    }
+
+    // Ring
+    const circ = 226;
+    const ringColors = { trusted: 'var(--success)', suspicious: 'var(--warning)', fraud: 'var(--danger)' };
+    document.getElementById('ringFill').style.strokeDashoffset = circ - (trust / 100) * circ;
+    document.getElementById('ringFill').style.stroke = ringColors[band] || 'var(--warning)';
+    document.getElementById('trustScore').textContent = trust;
+    document.getElementById('ringLabel').style.color = ringColors[band] || 'var(--warning)';
+
+    // Status badge
+    const statusEl = document.getElementById('trustStatus');
+    const statusMap = {
+        trusted:    { text: 'Trusted',        cls: 'status-trusted'    },
+        suspicious: { text: 'Suspicious',      cls: 'status-suspicious' },
+        fraud:      { text: 'Potential Fraud', cls: 'status-fraud'      }
+    };
+    const s = statusMap[band] || statusMap.suspicious;
+    statusEl.textContent = s.text;
+    statusEl.className   = 'trust-status ' + s.cls;
+
+    // Needle
+    document.getElementById('trustNeedle').style.left = trust + '%';
+
+    // Segment bars
+    const tW = band === 'trusted'    ? ((trust - 80) / 20 * 100) + '%' : '0%';
+    const sW = band === 'suspicious' ? ((trust - 50) / 30 * 100) + '%' : '0%';
+    const fW = band === 'fraud'      ? ((50 - trust) / 50 * 100) + '%' : '0%';
+    document.getElementById('segTrusted').style.width    = tW;
+    document.getElementById('segSuspicious').style.width = sW;
+    document.getElementById('segFraud').style.width      = fW;
+    document.getElementById('pctTrusted').textContent    = band === 'trusted'    ? trust + '%' : '—';
+    document.getElementById('pctSuspicious').textContent = band === 'suspicious' ? trust + '%' : '—';
+    document.getElementById('pctFraud').textContent      = band === 'fraud'      ? (100 - trust * 2) + '%' : '—';
+
+    // Reason string
+    const icons = { trusted: '✅ ', suspicious: '⚠️ ', fraud: '🚨 ' };
+    document.getElementById('reasonIcon').textContent = icons[band] || '⚠️ ';
+    document.getElementById('reasonText').textContent = data.reason || 'No reason provided.';
+    document.getElementById('reasonArea').style.borderLeftColor = ringColors[band];
+
+    // Screen reader announcement
+    document.getElementById('srStatus').textContent =
+        'Trust score ' + trust + ' out of 100, ' + s.text + '. ' + (data.reason || '');
+
+    // ── Five signal panels ──────────────────────
+    const sig   = data.signals || {};
+    const tiers = data.tiers   || {};
+
+    const PANELS = [
+        { id: 0, label: 'Identity',        field: 'identity_score',        tier: tiers.identity        },
+        { id: 1, label: 'Liveness',        field: 'liveness_score',        tier: tiers.liveness        },
+        { id: 2, label: 'Visual deepfake', field: 'visual_deepfake_score', tier: tiers.visual_deepfake },
+        { id: 3, label: 'Audio deepfake',  field: 'audio_deepfake_score',  tier: tiers.audio_deepfake  },
+        { id: 4, label: 'Injection risk',  field: 'injection_risk_score',  tier: tiers.injection_risk  }
     ];
 
-    async function fetchLiveScores(){
-        try {
-            var res = await fetch('http://localhost:5000/scores');
-            if (!res.ok) throw new Error('status ' + res.status);
-            var data = await res.json();
-            applyLiveData(data);
-        } catch(err) {
-            document.getElementById('reasonText').textContent =
-                'Cannot reach backend at localhost:5000 \u2014 is app.py running?';
-            document.getElementById('reasonArea').style.borderLeftColor = 'var(--danger)';
-            document.getElementById('reasonIcon').textContent = '\u26A0\uFE0F ';
-        }
-    }
+    const TIER_STYLES = {
+        good: { chipCls: 'chip-good', panelCls: 'panel-good', valCls: 'val-good', bar: 'linear-gradient(90deg,var(--success),#4ade80)', chip: 'Pass'  },
+        warn: { chipCls: 'chip-warn', panelCls: 'panel-warn', valCls: 'val-warn', bar: 'linear-gradient(90deg,var(--warning),#fbbf24)', chip: 'Review'},
+        bad:  { chipCls: 'chip-bad',  panelCls: 'panel-bad',  valCls: 'val-bad',  bar: 'linear-gradient(90deg,var(--danger),#f87171)',  chip: 'Alert' }
+    };
 
-    function applyLiveData(data){
-        var trust = data.trust_score;
-        var band  = data.trust_band;
-        var circ  = 226;
+    PANELS.forEach(panel => {
+        const score    = sig[panel.field];
+        const tierKey  = panel.tier || 'warn';
+        const style    = TIER_STYLES[tierKey] || TIER_STYLES.warn;
+        const hasScore = score !== null && score !== undefined;
 
-        var ringColors = {
-            trusted:    'var(--success)',
-            suspicious: 'var(--warning)',
-            fraud:      'var(--danger)'
-        };
-
-        if (trust === null || trust === undefined){
-            document.getElementById('reasonText').textContent =
-                'Awaiting signals \u2014 no modules have reported yet.';
-            document.getElementById('reasonIcon').textContent = '\u23F3 ';
-            return;
+        const panelEl = document.querySelector('.score-panel:nth-child(' + (panel.id + 1) + ')');
+        if (panelEl) {
+            panelEl.classList.remove('panel-good', 'panel-warn', 'panel-bad');
+            panelEl.classList.add(style.panelCls);
         }
 
-        // Ring
-        document.getElementById('ringFill').style.strokeDashoffset = circ - (trust/100)*circ;
-        document.getElementById('ringFill').style.stroke = ringColors[band] || 'var(--warning)';
-        document.getElementById('trustScore').textContent = trust;
-        document.getElementById('ringLabel').style.color  = ringColors[band] || 'var(--warning)';
-
-        // Status badge
-        var statusMap = {
-            trusted:    { text:'Trusted',        cls:'status-trusted'    },
-            suspicious: { text:'Suspicious',      cls:'status-suspicious' },
-            fraud:      { text:'Potential Fraud', cls:'status-fraud'      }
-        };
-        var sm = statusMap[band] || statusMap.suspicious;
-        var statusEl = document.getElementById('trustStatus');
-        statusEl.textContent = sm.text;
-        statusEl.className   = 'trust-status ' + sm.cls;
-
-        // Needle
-        document.getElementById('trustNeedle').style.left = trust + '%';
-
-        // Segment bars
-        var tW = band==='trusted'    ? ((trust-80)/20*100)+'%' : '0%';
-        var sW = band==='suspicious' ? ((trust-50)/30*100)+'%' : '0%';
-        var fW = band==='fraud'      ? ((50-trust)/50*100)+'%' : '0%';
-        document.getElementById('segTrusted').style.width    = tW;
-        document.getElementById('segSuspicious').style.width = sW;
-        document.getElementById('segFraud').style.width      = fW;
-        document.getElementById('pctTrusted').textContent    = band==='trusted'    ? trust+'%' : '\u2014';
-        document.getElementById('pctSuspicious').textContent = band==='suspicious' ? trust+'%' : '\u2014';
-        document.getElementById('pctFraud').textContent      = band==='fraud'      ? (100-trust*2)+'%' : '\u2014';
-
-        // Reason
-        var icons = { trusted:'\u2705 ', suspicious:'\u26A0\uFE0F ', fraud:'\uD83D\uDEA8 ' };
-        document.getElementById('reasonIcon').textContent = icons[band] || '\u26A0\uFE0F ';
-        document.getElementById('reasonText').textContent = data.reason || 'No reason provided.';
-        document.getElementById('reasonArea').style.borderLeftColor = ringColors[band] || 'var(--warning)';
-
-        // Screen reader
-        document.getElementById('srStatus').textContent =
-            'Trust score ' + trust + ' out of 100, ' + sm.text + '. ' + (data.reason||'');
-
-        // Session ID line — uses the stored constant, never regenerated
-        var reporting = data.modules_reporting || [];
-        document.getElementById('sessionIdText').textContent =
-            'Session ID: ' + SESSION_ID + ' \u00B7 ' + reporting.length + '/3 modules active';
-
-        // Five signal panels
-        var sig   = data.signals || {};
-        var tiers = data.tiers   || {};
-
-        PANELS.forEach(function(panel){
-            var score    = sig[panel.field];
-            var tierKey  = tiers[panel.tierKey] || 'warn';
-            var style    = TIER_STYLES[tierKey] || TIER_STYLES.warn;
-            var hasScore = score !== null && score !== undefined;
-
-            var panelEl = document.querySelectorAll('.score-panel')[panel.id];
-            if (panelEl) {
-                panelEl.classList.remove('panel-good','panel-warn','panel-bad');
-                panelEl.classList.add(style.panelCls);
-            }
-
-            var valEl = document.getElementById('val'+panel.id);
-            if (valEl) {
-                valEl.textContent = hasScore ? Math.round(score) : '\u2014';
-                valEl.className   = 'score-panel-value ' + (hasScore ? style.valCls : '');
-            }
-
-            var barEl = document.getElementById('bar'+panel.id);
-            if (barEl) {
-                barEl.style.width      = hasScore ? score+'%' : '0%';
-                barEl.style.background = hasScore ? style.bar : '';
-            }
-
-            var chipEl = document.getElementById('chip'+panel.id);
-            if (chipEl) {
-                chipEl.textContent = hasScore ? style.chip : 'Pending';
-                chipEl.className   = 'score-chip ' + (hasScore ? style.chipCls : 'chip-warn');
-            }
-
-            var footEl = document.getElementById('foot'+panel.id);
-            if (footEl) {
-                footEl.textContent = hasScore
-                    ? panel.label + ' score: ' + Math.round(score)
-                    : 'Awaiting ' + panel.label.toLowerCase() + ' module\u2026';
-            }
-        });
-
-        // Injection detail stats (from raw security module payload)
-        var secRaw = data.raw && data.raw.security;
-        if (secRaw) {
-            document.getElementById('injTiming').textContent  =
-                secRaw.frame_timing_anomaly_score !== undefined
-                    ? secRaw.frame_timing_anomaly_score + ' pts' : '\u2014';
-            document.getElementById('injVirtual').textContent =
-                secRaw.virtual_camera_detected !== undefined
-                    ? (secRaw.virtual_camera_detected ? '\u26A0 Detected' : '\u2714 None') : '\u2014';
-            document.getElementById('injVerdict').textContent =
-                secRaw.verdict || '\u2014';
+        const valEl = document.getElementById('val' + panel.id);
+        if (valEl) {
+            valEl.textContent = hasScore ? Math.round(score) : '—';
+            valEl.className   = 'score-panel-value ' + (hasScore ? style.valCls : '');
         }
-    }
 
-    // Test payload button — fires random vision scores so you can
-    // confirm the dashboard updates without needing Member 1 running.
-    document.getElementById('cycleBtn').addEventListener('click', async function(){
-        var payload = {
-            module: 'vision',
-            session_id: SESSION_ID,
-            timestamp: new Date().toISOString(),
-            face_detected: true,
-            multi_face_alert: false,
-            identity_score:        Math.round(60 + Math.random()*40),
-            liveness_score:        Math.round(60 + Math.random()*40),
-            visual_deepfake_score: Math.round(60 + Math.random()*40),
-            verdict: 'REAL'
-        };
-        try {
-            await fetch('http://localhost:5000/score', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-        } catch(err) { console.error('Test payload failed:', err); }
+        const barEl = document.getElementById('bar' + panel.id);
+        if (barEl) {
+            barEl.style.width      = hasScore ? score + '%' : '0%';
+            barEl.style.background = style.bar;
+        }
+
+        const chipEl = document.getElementById('chip' + panel.id);
+        if (chipEl) {
+            chipEl.textContent = hasScore ? style.chip : 'Pending';
+            chipEl.className   = 'score-chip ' + (hasScore ? style.chipCls : '');
+        }
+
+        const footEl = document.getElementById('foot' + panel.id);
+        if (footEl) {
+            footEl.textContent = hasScore
+                ? panel.label + ' score: ' + Math.round(score)
+                : 'Awaiting ' + panel.label.toLowerCase() + ' module...';
+        }
     });
 
-    // ── Boot ──────────────────────────────────────────────────────────
-    updateViewportLabel();
-    document.getElementById('sessionIdText').textContent = 'Session ID: ' + SESSION_ID;
+    // ── Modules reporting count ─────────────────
+    const reporting = data.modules_reporting || [];
+    document.getElementById('sessionIdText').textContent =
+        'Session ID: ' + generateSessionId() +
+        ' · ' + reporting.length + '/3 modules active';
+}
+
+// ── Cycle button now sends a test payload ───
+// Useful for demoing without all modules running.
+document.getElementById('cycleBtn').textContent = 'Send test payload to backend →';
+document.getElementById('cycleBtn').addEventListener('click', async () => {
+    const testPayload = {
+        module: "vision",
+        session_id: "demo_test_" + Date.now(),
+        timestamp: new Date().toISOString(),
+        face_detected: true,
+        multi_face_alert: false,
+        identity_score: Math.round(60 + Math.random() * 40),
+        liveness_score: Math.round(60 + Math.random() * 40),
+        visual_deepfake_score: Math.round(60 + Math.random() * 40),
+        verdict: "REAL"
+    };
+    try {
+        await fetch('http://localhost:5000/score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(testPayload)
+        });
+    } catch (err) {
+        console.error('Test payload send failed:', err);
+    }
+});
+
+// ── Boot sequence ───────────────────────────
+updateViewportLabel();
+document.getElementById('sessionIdText').textContent = 'Session ID: ' + generateSessionId();
+async function bootVerifier(){
+    await window.requestConsent();
+    window.onConsentRetry = bootVerifier;
     joinAsVerifier();
-    fetchLiveScores();
-    setInterval(fetchLiveScores, 1500);
+}
+bootVerifier();
+setInterval(fetchLiveScores, 1500);  // poll every 1.5 seconds
+fetchLiveScores();                   // also fire immediately on load
 </script>
 </body>
 </html>
