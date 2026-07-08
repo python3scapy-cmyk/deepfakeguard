@@ -128,6 +128,7 @@
         .score-panel.panel-good::before{background:linear-gradient(90deg,var(--success),#4ade80);}
         .score-panel.panel-warn::before{background:linear-gradient(90deg,var(--warning),#fbbf24);}
         .score-panel.panel-bad::before{background:linear-gradient(90deg,var(--danger),#f87171);}
+        .score-panel.panel-pending::before{background:linear-gradient(90deg,#5a6484,#7c88ab);}
         .score-panel:hover{box-shadow:var(--shadow-hover);transform:translateY(-2px);border-color:var(--border);}
         .score-panel-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
         .score-panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);}
@@ -135,6 +136,7 @@
         .chip-good{background:var(--success-bg);color:var(--success);}
         .chip-warn{background:var(--warning-bg);color:var(--warning);}
         .chip-bad{background:var(--danger-bg);color:var(--danger);}
+        .chip-pending{background:rgba(124,136,171,0.15);color:#7c88ab;}
         .score-panel-value{font-size:36px;font-weight:800;line-height:1;letter-spacing:-1px;margin-bottom:10px;}
         .val-good{color:var(--success);}.val-warn{color:var(--warning);}.val-bad{color:var(--danger);}
         .score-bar{height:5px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;}
@@ -431,12 +433,26 @@
                     <div class="score-panel-value val-good" id="val0">92</div>
                     <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:92%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
                     <div class="score-panel-footer" id="foot0">ID document verified</div>
+                    <div class="identity-detail" id="identityDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div style="display:flex;justify-content:space-between;color:#8b95b5;">
+                            <span id="identitySimilarity">Similarity: &mdash;</span>
+                            <span id="identityConfidence">&mdash;</span>
+                        </div>
+                        <div id="identityMultiFaceWarning" style="display:none;color:#f2b8b8;margin-top:4px;font-weight:600;">&#9888; Multiple faces detected</div>
+                    </div>
                 </div>
                 <div class="score-panel panel-good">
                     <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-good" id="chip1">Pass</span></div>
                     <div class="score-panel-value val-good" id="val1">88</div>
                     <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:88%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
                     <div class="score-panel-footer" id="foot1">Challenge passed</div>
+                    <div class="liveness-detail" id="livenessDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div id="livenessPrompt" style="font-weight:600;color:var(--text-primary,#e8edf8);margin-bottom:4px;">Waiting for challenge&hellip;</div>
+                        <div style="display:flex;justify-content:space-between;color:#8b95b5;">
+                            <span id="livenessCountdown">&mdash;</span>
+                            <span id="livenessResponseTime">&mdash;</span>
+                        </div>
+                    </div>
                 </div>
                 <div class="score-panel panel-warn">
                     <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-warn" id="chip2">Review</span></div>
@@ -444,11 +460,14 @@
                     <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:65%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
                     <div class="score-panel-footer" id="foot2">Minor artifacts detected</div>
                 </div>
-                <div class="score-panel panel-warn">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-warn" id="chip3">Review</span></div>
-                    <div class="score-panel-value val-warn" id="val3">78</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:78%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
-                    <div class="score-panel-footer" id="foot3">Slight frequency anomaly</div>
+                <div class="score-panel panel-pending" id="audioPanel">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-pending" id="chip3">Pending</span></div>
+                    <div class="score-panel-value" id="val3" style="color:#7c88ab;">—</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot3" style="display:flex;align-items:center;gap:8px;">
+                        <span class="audio-pending-spinner" style="width:12px;height:12px;border:2px solid #2a3358;border-top-color:#7c88ab;border-radius:50%;display:inline-block;animation:consentSpin 0.9s linear infinite;"></span>
+                        Lip-sync module not yet connected
+                    </div>
                 </div>
                 <div class="score-panel panel-bad panel-injection">
                     <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-bad" id="chip4">Alert</span></div>
@@ -462,6 +481,29 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div class="session-log-panel" style="
+        margin-top: 16px; background: var(--bg-card, #12172a);
+        border-radius: var(--radius-sm, 10px); border: 1px solid var(--border-light, #232b45);
+        padding: 18px; box-shadow: var(--shadow-sm, none);
+    ">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted,#8b95b5);margin:0;">
+                Session Log <span style="font-weight:400;color:#5a6484;">&middot; continuous verification audit trail</span>
+            </h3>
+            <button id="sessionResetBtn" style="
+                font-size: 11px; padding: 6px 12px; border-radius: 6px;
+                border: 1px solid var(--border-light,#3a4468); background: transparent;
+                color: #b7c0d8; cursor: pointer;
+            ">Reset Session</button>
+        </div>
+        <div id="sessionLogList" style="
+            max-height: 220px; overflow-y: auto; font-size: 12px;
+            display: flex; flex-direction: column-reverse; gap: 6px;
+        ">
+            <div style="color:#5a6484;">No events yet — session log will populate as verification signals arrive.</div>
         </div>
     </div>
 </main>
@@ -793,6 +835,156 @@ async function fetchLiveScores() {
     }
 }
 
+// ── Liveness challenge rendering (Day 4) ────
+const CHALLENGE_DISPLAY_NAMES = {
+    blink:      'Blink',
+    turn_left:  'Turn head left',
+    turn_right: 'Turn head right'
+};
+
+const FAIL_REASON_DISPLAY = {
+    timeout:                  'Timed out — no response detected',
+    wrong_direction:          'Wrong direction detected',
+    spoof_detected:           'Spoof detected (texture/depth anomaly)',
+    multiple_faces_detected:  'Multiple faces detected in frame'
+};
+
+let lastRenderedChallengeTimestamp = null;
+
+function renderLivenessChallenge(challenge) {
+    const promptEl   = document.getElementById('livenessPrompt');
+    const countdownEl = document.getElementById('livenessCountdown');
+    const responseEl  = document.getElementById('livenessResponseTime');
+    const footEl      = document.getElementById('foot1');
+    if (!promptEl) return;
+
+    if (!challenge) {
+        promptEl.textContent = 'Waiting for challenge...';
+        countdownEl.textContent = '—';
+        responseEl.textContent = '—';
+        if (footEl) footEl.textContent = 'Awaiting liveness module...';
+        return;
+    }
+
+    const typeName = CHALLENGE_DISPLAY_NAMES[challenge.challenge_type] || challenge.challenge_type;
+    lastRenderedChallengeTimestamp = challenge.timestamp;
+
+    if (challenge.challenge_passed) {
+        promptEl.textContent = '"' + challenge.prompt + '" (' + typeName + ') — ✓ Passed';
+        countdownEl.textContent = 'Within ' + challenge.timeout_sec + 's window';
+        responseEl.textContent = challenge.response_time_ms + 'ms response';
+        if (footEl) footEl.textContent = typeName + ' challenge passed in ' + challenge.response_time_ms + 'ms';
+    } else {
+        const reasonText = FAIL_REASON_DISPLAY[challenge.fail_reason] || challenge.fail_reason;
+        promptEl.textContent = '"' + challenge.prompt + '" (' + typeName + ') — ✗ Failed';
+        countdownEl.textContent = reasonText;
+        responseEl.textContent = challenge.response_time_ms + 'ms response';
+        if (footEl) footEl.textContent = typeName + ' challenge failed — ' + reasonText;
+    }
+}
+
+
+// ── Identity match rendering (Day 5) ────────
+const CONFIDENCE_DISPLAY = {
+    high: 'High confidence',
+    low:  'Low confidence — uncertain zone',
+    none: 'No confidence — no clear face match'
+};
+
+function renderIdentityDetail(identity) {
+    const simEl    = document.getElementById('identitySimilarity');
+    const confEl   = document.getElementById('identityConfidence');
+    const warnEl   = document.getElementById('identityMultiFaceWarning');
+    const footEl   = document.getElementById('foot0');
+    if (!simEl) return;
+
+    if (!identity) {
+        simEl.textContent = 'Similarity: —';
+        confEl.textContent = '—';
+        warnEl.style.display = 'none';
+        if (footEl) footEl.textContent = 'Awaiting identity module...';
+        return;
+    }
+
+    const simPct = (identity.similarity_score * 100).toFixed(1);
+    simEl.textContent = 'Similarity: ' + simPct + '% (threshold ' + (identity.threshold_used * 100).toFixed(0) + '%)';
+    confEl.textContent = CONFIDENCE_DISPLAY[identity.confidence] || identity.confidence;
+    confEl.style.color = identity.confidence === 'high' ? '#4ade80'
+                        : identity.confidence === 'low'  ? '#fbbf24'
+                        : '#f87171';
+
+    warnEl.style.display = identity.multiple_faces_detected ? 'block' : 'none';
+
+    if (footEl) {
+        if (identity.verdict === 'REAL') {
+            footEl.textContent = 'Identity match confirmed — ' + simPct + '% similarity';
+        } else if (identity.confidence === 'low') {
+            footEl.textContent = 'Uncertain match — ' + simPct + '% similarity, below confident threshold';
+        } else {
+            footEl.textContent = 'Identity mismatch — ' + simPct + '% similarity';
+        }
+    }
+}
+
+
+// ── Session log rendering (Day 6-7 stretch goal) ────
+// Mirrors NIST SP 800-63-4's continuous-evaluation framing: the
+// dashboard doesn't just show a point-in-time score, it shows the
+// timestamped trail of every signal that fed into it.
+const LOG_EVENT_STYLE = {
+    liveness_challenge: { icon: '&#128065;', color: '#8fa8ff' },
+    identity_check:      { icon: '&#128100;', color: '#8fa8ff' },
+    band_change:         { icon: '&#9888;',   color: '#fbbf24' },
+    injection_alert:     { icon: '&#128246;', color: '#f87171' },
+    audio_alert:         { icon: '&#127911;', color: '#f87171' },
+    session_reset:       { icon: '&#8635;',   color: '#7c88ab' }
+};
+
+const BAND_LOG_COLOR = { trusted: '#4ade80', suspicious: '#fbbf24', fraud: '#f87171' };
+
+let lastRenderedLogLength = 0;
+
+function renderSessionLog(log) {
+    const listEl = document.getElementById('sessionLogList');
+    if (!listEl) return;
+
+    if (!log || log.length === 0) {
+        listEl.innerHTML = '<div style="color:#5a6484;">No events yet — session log will populate as verification signals arrive.</div>';
+        lastRenderedLogLength = 0;
+        return;
+    }
+
+    // Only re-render when new entries have actually arrived, so the
+    // scroll position and any hover state isn't reset every 1.5s poll.
+    if (log.length === lastRenderedLogLength) return;
+    lastRenderedLogLength = log.length;
+
+    listEl.innerHTML = log.map(function(entry){
+        const style = LOG_EVENT_STYLE[entry.event_type] || { icon: '&#8226;', color: '#8b95b5' };
+        const color = entry.event_type === 'band_change' && entry.band
+            ? (BAND_LOG_COLOR[entry.band] || style.color)
+            : style.color;
+        const time = new Date(entry.timestamp).toLocaleTimeString();
+        return '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">' +
+            '<span style="color:#5a6484;font-variant-numeric:tabular-nums;white-space:nowrap;">' + time + '</span>' +
+            '<span style="color:' + color + ';">' + style.icon + '</span>' +
+            '<span style="color:#c9d2ea;">' + entry.detail + '</span>' +
+        '</div>';
+    }).join('');
+}
+
+document.getElementById('sessionResetBtn').addEventListener('click', async function(){
+    if (!confirm('Reset the session? This clears all verification signals and the log.')) return;
+    try {
+        await fetch('http://localhost:5000/session-reset', { method: 'POST' });
+        lastRenderedLogLength = 0;
+        fetchLiveScores();
+    } catch (err) {
+        console.error('Session reset failed:', err);
+    }
+});
+
+
 function applyLiveData(data) {
     // ── Trust score + band ──────────────────────
     const trust = data.trust_score;
@@ -873,35 +1065,46 @@ function applyLiveData(data) {
 
         const panelEl = document.querySelector('.score-panel:nth-child(' + (panel.id + 1) + ')');
         if (panelEl) {
-            panelEl.classList.remove('panel-good', 'panel-warn', 'panel-bad');
-            panelEl.classList.add(style.panelCls);
+            panelEl.classList.remove('panel-good', 'panel-warn', 'panel-bad', 'panel-pending');
+            panelEl.classList.add(hasScore ? style.panelCls : 'panel-pending');
         }
 
         const valEl = document.getElementById('val' + panel.id);
         if (valEl) {
             valEl.textContent = hasScore ? Math.round(score) : '—';
             valEl.className   = 'score-panel-value ' + (hasScore ? style.valCls : '');
+            if (!hasScore) valEl.style.color = '#7c88ab';
         }
 
         const barEl = document.getElementById('bar' + panel.id);
         if (barEl) {
             barEl.style.width      = hasScore ? score + '%' : '0%';
-            barEl.style.background = style.bar;
+            barEl.style.background = hasScore ? style.bar : 'transparent';
         }
 
         const chipEl = document.getElementById('chip' + panel.id);
         if (chipEl) {
             chipEl.textContent = hasScore ? style.chip : 'Pending';
-            chipEl.className   = 'score-chip ' + (hasScore ? style.chipCls : '');
+            chipEl.className   = 'score-chip ' + (hasScore ? style.chipCls : 'chip-pending');
         }
 
         const footEl = document.getElementById('foot' + panel.id);
-        if (footEl) {
+        const isCustomFooter = panel.field === 'liveness_score' || panel.field === 'identity_score'
+            || (panel.field === 'audio_deepfake_score' && !hasScore);
+        if (footEl && !isCustomFooter) {
             footEl.textContent = hasScore
                 ? panel.label + ' score: ' + Math.round(score)
                 : 'Awaiting ' + panel.label.toLowerCase() + ' module...';
         }
     });
+
+    // ── Liveness challenge detail (Day 4) ───────
+    // Shows the exact prompt M1 issued, a live countdown against its
+    // timeout, and the pass/fail result with response time — this is
+    // the "story, not just a score" panel.
+    renderLivenessChallenge(data.challenge);
+    renderIdentityDetail(data.identity);
+    renderSessionLog(data.session_log);
 
     // ── Modules reporting count ─────────────────
     const reporting = data.modules_reporting || [];
@@ -914,22 +1117,62 @@ function applyLiveData(data) {
 // Useful for demoing without all modules running.
 document.getElementById('cycleBtn').textContent = 'Send test payload to backend →';
 document.getElementById('cycleBtn').addEventListener('click', async () => {
-    const testPayload = {
+    const types = ['blink', 'turn_left', 'turn_right'];
+    const prompts = { blink: 'Please blink twice', turn_left: 'Turn your head left', turn_right: 'Turn your head right' };
+    const type = types[Math.floor(Math.random() * types.length)];
+    const passed = Math.random() > 0.35;
+    const failReasons = ['timeout', 'wrong_direction', 'spoof_detected', 'multiple_faces_detected'];
+
+    const visionPayload = {
         module: "vision",
+        session_id: "demo_test_" + Date.now(),
+        timestamp: Date.now(),
+        payload: {
+            challenge_type: type,
+            prompt: prompts[type],
+            timeout_sec: 5.0,
+            challenge_passed: passed,
+            fail_reason: passed ? null : failReasons[Math.floor(Math.random() * failReasons.length)],
+            metrics: {
+                response_time_ms: Math.round(400 + Math.random() * 2000),
+                blink_count_detected: type === 'blink' ? 1 : 0,
+                avg_texture_score: Math.round(50 + Math.random() * 50),
+                max_yaw_deviation: Math.round((Math.random() - 0.5) * 40)
+            }
+        }
+    };
+
+    // Randomly land in match / mismatch / uncertain zone, mirroring
+    // M3's three confirmed example payloads.
+    const similarity = Math.random();
+    let confidence, verdict;
+    if (similarity >= 0.60) { confidence = 'high'; verdict = 'REAL'; }
+    else if (similarity >= 0.50) { confidence = 'low'; verdict = 'FAKE'; }
+    else { confidence = 'none'; verdict = 'FAKE'; }
+
+    const identityPayload = {
+        module: "identity",
         session_id: "demo_test_" + Date.now(),
         timestamp: new Date().toISOString(),
         face_detected: true,
-        multi_face_alert: false,
-        identity_score: Math.round(60 + Math.random() * 40),
-        liveness_score: Math.round(60 + Math.random() * 40),
-        visual_deepfake_score: Math.round(60 + Math.random() * 40),
-        verdict: "REAL"
+        multiple_faces_detected: Math.random() < 0.08,
+        identity_score: Math.round(similarity * 100),
+        similarity_score: Number(similarity.toFixed(3)),
+        threshold_used: 0.6,
+        confidence: confidence,
+        verdict: verdict
     };
+
     try {
         await fetch('http://localhost:5000/score', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(testPayload)
+            body: JSON.stringify(visionPayload)
+        });
+        await fetch('http://localhost:5000/score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(identityPayload)
         });
     } catch (err) {
         console.error('Test payload send failed:', err);
