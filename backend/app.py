@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 from datetime import datetime, timezone
+import time
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -17,6 +18,15 @@ latest_scores = {
     "security": None,
     "identity": None
 }
+
+# Track when each module last reported (for signal_missing detection).
+last_seen = {
+    "vision":   None,
+    "audio":    None,
+    "security": None,
+    "identity": None
+}
+SIGNAL_TIMEOUT_SEC = 3.0  # if no report in 3s, mark as missing
 
 # Rolling history of M1's liveness challenge events (most recent last).
 # Kept separate from latest_scores since M1 sends one terminal payload
@@ -34,6 +44,10 @@ MAX_CHALLENGE_HISTORY = 20
 session_log = []
 MAX_LOG_ENTRIES = 500
 _last_trust_band = None
+
+# EMA state for trust-score smoothing
+_ema_trust_score = None
+EMA_ALPHA = 0.3
 
 
 def log_event(event_type, detail, band=None):
@@ -176,32 +190,46 @@ def derive_liveness_score(vision_inner):
     return 15
 
 
-def compute_trust(scores):
+def normalize_to_trust_contribution(field, raw_score, payload=None):
+    """
+    Convert a raw 0-100 score (or None) into a 0.0-1.0 trust contribution.
+    Missing signals use a neutral 0.5 placeholder.
+    """
+    if raw_score is None:
+        return 0.5  # neutral placeholder for missing signals
+
+    # All scores are 0-100, higher = more trustworthy
+    trust = raw_score / 100.0
+
+    # Special handling for injection: if virtual camera detected, cap at 0.2
+    if field == "injection_risk_score" and payload and payload.get("virtual_camera_detected"):
+        trust = min(trust, 0.2)
+
+    return round(trust, 2)
+
+
+def compute_trust(scores, sub_scores):
     """
     Fuses all available module scores into one
     0–100 trust score and a band label.
-    Only uses modules that have reported so far.
+    Uses the Week 3 weights: identity 0.25, liveness 0.25, visual 0.20,
+    audio 0.20, injection 0.10. Missing signals use neutral 0.5.
     """
     weights = {
-        "identity_score":        0.20,
-        "liveness_score":        0.20,
+        "identity_score":        0.25,
+        "liveness_score":        0.25,
         "visual_deepfake_score": 0.20,
         "audio_deepfake_score":  0.20,
-        "injection_risk_score":  0.20
+        "injection_risk_score":  0.10
     }
 
-    total_weight = 0.0
     weighted_sum = 0.0
-
     for field, weight in weights.items():
-        if field in scores and scores[field] is not None:
-            weighted_sum += scores[field] * weight
-            total_weight += weight
+        trust_val = sub_scores.get(field, 0.5)
+        weighted_sum += trust_val * weight
 
-    if total_weight == 0:
-        return None, "awaiting"
-
-    trust = round(weighted_sum / total_weight)
+    trust = round(weighted_sum * 100)
+    trust = max(0, min(100, trust))
 
     if trust >= 80:
         band = "trusted"
@@ -213,13 +241,56 @@ def compute_trust(scores):
     return trust, band
 
 
-def build_reason(scores, verdicts, vision_fail_reason=None, identity_confidence=None):
+def apply_ema(new_trust):
+    """
+    Apply Exponential Moving Average smoothing to the trust score.
+    alpha = 0.3 means responsive but filtered.
+    """
+    global _ema_trust_score
+    if _ema_trust_score is None:
+        _ema_trust_score = float(new_trust)
+    else:
+        _ema_trust_score = EMA_ALPHA * new_trust + (1 - EMA_ALPHA) * _ema_trust_score
+    return round(_ema_trust_score)
+
+
+def detect_conflicts(flat_scores):
+    """
+    Detects alarming signal combinations that indicate a sophisticated
+    attacker who fooled one layer but not another.
+    """
+    conflicts = []
+    identity = flat_scores.get("identity_score")
+    visual = flat_scores.get("visual_deepfake_score")
+    liveness = flat_scores.get("liveness_score")
+    injection = flat_scores.get("injection_risk_score")
+
+    if identity is not None and visual is not None:
+        if identity > 70 and visual < 30:
+            conflicts.append("identity_vs_visual_deepfake")
+
+    if liveness is not None and injection is not None:
+        if liveness > 80 and injection < 30:
+            conflicts.append("liveness_vs_injection")
+
+    return {"conflict_detected": len(conflicts) > 0, "conflict_types": conflicts}
+
+
+def build_reason(scores, verdicts, vision_fail_reason=None, identity_confidence=None,
+                 conflicts=None):
     """
     Builds a human-readable reason string based on
     which signals are flagged, for the dashboard
     explainability area.
     """
     flags = []
+
+    if conflicts and conflicts.get("conflict_detected"):
+        for ct in conflicts.get("conflict_types", []):
+            if ct == "identity_vs_visual_deepfake":
+                flags.append("identity matched but visual deepfake risk is elevated")
+            elif ct == "liveness_vs_injection":
+                flags.append("liveness passed but injection risk is high")
 
     if scores.get("injection_risk_score") is not None:
         if scores["injection_risk_score"] < 50:
@@ -263,6 +334,19 @@ def build_reason(scores, verdicts, vision_fail_reason=None, identity_confidence=
     return "Score reduced — " + "; ".join(flags) + "."
 
 
+def get_missing_signals():
+    """
+    Returns a list of module names that have not reported
+    within SIGNAL_TIMEOUT_SEC seconds.
+    """
+    now = time.time()
+    missing = []
+    for module, last in last_seen.items():
+        if last is None or (now - last) > SIGNAL_TIMEOUT_SEC:
+            missing.append(module)
+    return missing
+
+
 # ─────────────────────────────────────────────
 # REST endpoints
 # ─────────────────────────────────────────────
@@ -293,6 +377,7 @@ def receive_score():
         return jsonify({"error": err, "module": module}), 400
 
     latest_scores[module] = payload
+    last_seen[module] = time.time()
 
     if module == "vision":
         vision_challenge_history.append(payload)
@@ -343,34 +428,39 @@ def receive_score():
 @app.route('/scores', methods=['GET'])
 def get_scores():
     """
-    Returns all latest module signals plus a
-    fused trust score computed server-side.
-    This is what the dashboard polls every second.
+    Returns all latest module signals plus a fused trust score computed
+    server-side. Uses Week 3 weights, EMA smoothing, conflict detection,
+    and missing-signal handling. This is what the dashboard polls.
     """
     # Flatten all scores into one dict for fusion
     flat_scores = {}
     verdicts = []
+    module_payloads = {}  # keep payloads for trust-contribution lookups
 
     v = latest_scores.get("vision")
     vision_inner = None
     if v:
         vision_inner = v.get("payload")
         flat_scores["liveness_score"] = derive_liveness_score(vision_inner)
-        # vision has no top-level "verdict" field in M1's contract;
-        # treat a failed challenge as a FAKE-equivalent signal for the
-        # existing verdict-based reasoning below.
+        # Extract optional visual_deepfake_score if M1 sends it top-level
+        flat_scores["visual_deepfake_score"] = v.get("visual_deepfake_score")
         verdicts.append("FAKE" if vision_inner and not vision_inner.get("challenge_passed") else "REAL")
+        module_payloads["vision"] = v
 
+    # Pass through optional M2 fields for dashboard
+    # (rtf is available in the raw payload for the frontend)
     a = latest_scores.get("audio")
     if a:
         flat_scores["audio_deepfake_score"] = a.get("audio_deepfake_score")
         verdicts.append(a.get("verdict", "REAL"))
+        module_payloads["audio"] = a
 
     s = latest_scores.get("security")
     if s:
         flat_scores["injection_risk_score"]      = s.get("injection_risk_score")
         flat_scores["frame_timing_anomaly_score"] = s.get("frame_timing_anomaly_score")
         verdicts.append(s.get("verdict", "REAL"))
+        module_payloads["security"] = s
 
     i = latest_scores.get("identity")
     identity_detail = None
@@ -387,13 +477,41 @@ def get_scores():
             "verdict":                  i.get("verdict"),
             "timestamp":                i.get("timestamp")
         }
+        module_payloads["identity"] = i
 
-    trust, band = compute_trust(flat_scores)
+    # Compute trust contributions (sub-scores) for each signal.
+    # Missing signals get a neutral 0.5 placeholder.
+    sub_scores = {}
+    sub_scores["identity_score"] = normalize_to_trust_contribution(
+        "identity_score", flat_scores.get("identity_score"), module_payloads.get("identity")
+    )
+    sub_scores["liveness_score"] = normalize_to_trust_contribution(
+        "liveness_score", flat_scores.get("liveness_score"), module_payloads.get("vision")
+    )
+    sub_scores["visual_deepfake_score"] = normalize_to_trust_contribution(
+        "visual_deepfake_score", flat_scores.get("visual_deepfake_score"), module_payloads.get("vision")
+    )
+    sub_scores["audio_deepfake_score"] = normalize_to_trust_contribution(
+        "audio_deepfake_score", flat_scores.get("audio_deepfake_score"), module_payloads.get("audio")
+    )
+    sub_scores["injection_risk_score"] = normalize_to_trust_contribution(
+        "injection_risk_score", flat_scores.get("injection_risk_score"), module_payloads.get("security")
+    )
+
+    # Compute raw trust, then apply EMA smoothing
+    raw_trust, band = compute_trust(flat_scores, sub_scores)
+    ema_trust = apply_ema(raw_trust) if raw_trust is not None else None
+
+    # Conflict detection
+    conflicts = detect_conflicts(flat_scores)
+
+    # Detect missing signals
+    signal_missing = get_missing_signals()
 
     global _last_trust_band
     if band != "awaiting" and band != _last_trust_band:
         log_event("band_change",
-                   "Trust band changed to \"{}\" (score: {})".format(band, trust),
+                   "Trust band changed to \"{}\" (score: {})".format(band, raw_trust),
                    band=band)
     _last_trust_band = band
 
@@ -403,7 +521,8 @@ def get_scores():
         reason = build_reason(
             flat_scores, verdicts,
             vision_inner.get("fail_reason") if vision_inner else None,
-            identity_detail.get("confidence") if identity_detail else None
+            identity_detail.get("confidence") if identity_detail else None,
+            conflicts=conflicts
         )
 
     challenge_detail = None
@@ -419,9 +538,12 @@ def get_scores():
         }
 
     return jsonify({
-        "trust_score": trust,
+        "trust_score": raw_trust,
+        "ema_trust_score": ema_trust,
         "trust_band":  band,
         "reason":      reason,
+        "conflict_detected": conflicts.get("conflict_detected", False),
+        "conflict_types": conflicts.get("conflict_types", []),
         "challenge":   challenge_detail,
         "identity":    identity_detail,
         "challenge_history": [
@@ -442,6 +564,13 @@ def get_scores():
             "audio_deepfake_score":    flat_scores.get("audio_deepfake_score"),
             "injection_risk_score":    flat_scores.get("injection_risk_score")
         },
+        "sub_scores": {
+            "identity_trust":        sub_scores.get("identity_score"),
+            "liveness_trust":        sub_scores.get("liveness_score"),
+            "visual_trust":          sub_scores.get("visual_deepfake_score"),
+            "audio_trust":           sub_scores.get("audio_deepfake_score"),
+            "injection_trust":       sub_scores.get("injection_risk_score")
+        },
         "tiers": {
             "identity":       score_to_tier(flat_scores["identity_score"])        if flat_scores.get("identity_score")        is not None else None,
             "liveness":       score_to_tier(flat_scores["liveness_score"])        if flat_scores.get("liveness_score")        is not None else None,
@@ -449,6 +578,7 @@ def get_scores():
             "audio_deepfake": score_to_tier(flat_scores["audio_deepfake_score"])  if flat_scores.get("audio_deepfake_score")  is not None else None,
             "injection_risk": score_to_tier(flat_scores["injection_risk_score"])  if flat_scores.get("injection_risk_score")  is not None else None
         },
+        "signal_missing": signal_missing,
         "modules_reporting": [k for k, v in latest_scores.items() if v is not None],
         "session_log": session_log[-30:],
         "raw": latest_scores
@@ -468,12 +598,15 @@ def reset_session():
     "session reset" button so multiple demo scenarios can be run
     back-to-back without restarting the whole backend.
     """
-    global _last_trust_band
+    global _last_trust_band, _ema_trust_score
     for key in latest_scores:
         latest_scores[key] = None
+    for key in last_seen:
+        last_seen[key] = None
     vision_challenge_history.clear()
     session_log.clear()
     _last_trust_band = None
+    _ema_trust_score = None
     log_event("session_reset", "Session was reset.")
     return jsonify({"reset": True})
 

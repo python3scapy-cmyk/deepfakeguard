@@ -153,6 +153,22 @@
         .score-panel:nth-child(1){animation-delay:.06s;}.score-panel:nth-child(2){animation-delay:.12s;}.score-panel:nth-child(3){animation-delay:.18s;}.score-panel:nth-child(4){animation-delay:.24s;}.score-panel:nth-child(5){animation-delay:.30s;}
         ::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
         @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;}}
+        /* ── Week 3 Member 4 additions ─────────────────────── */
+        .conflict-alert{display:none;margin-bottom:16px;padding:14px 18px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);border-radius:var(--radius-sm);color:var(--danger);font-size:13px;font-weight:600;animation:slideUp .4s ease .1s backwards;}
+        .conflict-alert.visible{display:flex;align-items:center;gap:10px;}
+        .conflict-alert .conflict-icon{font-size:18px;}
+        .trust-score-band.prominent{padding:28px;}
+        .trust-score-band.prominent .score-ring-container{width:120px;height:120px;}
+        .trust-score-band.prominent .score-ring-container svg{width:120px;height:120px;}
+        .trust-score-band.prominent .ring-label{font-size:28px;}
+        .trust-score-band.prominent .trust-status{font-size:13px;padding:7px 18px;}
+        .trust-score-band.prominent .reason-area{font-size:13px;padding:16px 18px;}
+        .waveform-canvas{width:100%;height:40px;margin-top:8px;border-radius:4px;background:var(--bg-tertiary);}
+        .panel-badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:uppercase;margin-left:6px;vertical-align:middle;}
+        .badge-high{background:var(--success-bg);color:var(--success);}
+        .badge-low{background:var(--warning-bg);color:var(--warning);}
+        .no-face-placeholder{color:var(--text-muted);font-size:12px;font-style:italic;padding:6px 0;}
+        .cascade-tooltip{cursor:help;border-bottom:1px dashed var(--text-muted);}
     </style>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
@@ -355,6 +371,11 @@
 </header>
 <main class="container" id="mainContainer">
     <h2 class="sr-only">Live verification dashboard</h2>
+    <!-- ===== Conflict Alert Banner (Week 3 Day 4) ===== -->
+    <div id="conflictAlert" class="conflict-alert">
+        <span class="conflict-icon">&#x1F6A8;</span>
+        <span id="conflictText">Conflicting signals detected</span>
+    </div>
     <div class="layout-split" id="layoutWrapper">
         <div class="video-panel" id="videoPanel">
             <video class="video-el" id="remoteVideo" autoplay playsinline></video>
@@ -383,7 +404,7 @@
             </div>
         </div>
         <div class="scores-column">
-            <div class="trust-score-band">
+            <div class="trust-score-band prominent">
                 <div class="trust-header">
                     <h2 class="trust-title">Overall Trust Score</h2>
                     <span class="trust-status status-suspicious" id="trustStatus">Suspicious</span>
@@ -454,20 +475,25 @@
                         </div>
                     </div>
                 </div>
-                <div class="score-panel panel-warn">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-warn" id="chip2">Review</span></div>
+                <div class="score-panel panel-warn" id="visualPanel">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-warn" id="chip2">Review</span><span class="panel-badge badge-low" id="visualConfidence" style="display:none;">Low</span></div>
                     <div class="score-panel-value val-warn" id="val2">65</div>
                     <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:65%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
                     <div class="score-panel-footer" id="foot2">Minor artifacts detected</div>
+                    <div class="visual-detail" id="visualDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div id="visualFaceState" style="color:#8b95b5;">Face detected</div>
+                        <div id="visualCascade" style="color:#5a6484;margin-top:2px;display:none;">Cascade: <span class="cascade-tooltip" title="Average cascade stage (1 = cheap texture check, 2 = full EfficientNet)">1.4</span></div>
+                    </div>
                 </div>
                 <div class="score-panel panel-pending" id="audioPanel">
                     <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-pending" id="chip3">Pending</span></div>
                     <div class="score-panel-value" id="val3" style="color:#7c88ab;">—</div>
                     <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:0%;"></div></div>
                     <div class="score-panel-footer" id="foot3" style="display:flex;align-items:center;gap:8px;">
-                        <span class="audio-pending-spinner" style="width:12px;height:12px;border:2px solid #2a3358;border-top-color:#7c88ab;border-radius:50%;display:inline-block;animation:consentSpin 0.9s linear infinite;"></span>
-                        Lip-sync module not yet connected
+                        <span class="audio-pending-spinner" id="audioSpinner" style="width:12px;height:12px;border:2px solid #2a3358;border-top-color:#7c88ab;border-radius:50%;display:inline-block;animation:consentSpin 0.9s linear infinite;"></span>
+                        <span id="audioFooterText">Lip-sync module not yet connected</span>
                     </div>
+                    <canvas class="waveform-canvas" id="audioWaveform" width="200" height="40"></canvas>
                 </div>
                 <div class="score-panel panel-bad panel-injection">
                     <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-bad" id="chip4">Alert</span></div>
@@ -987,7 +1013,9 @@ document.getElementById('sessionResetBtn').addEventListener('click', async funct
 
 function applyLiveData(data) {
     // ── Trust score + band ──────────────────────
-    const trust = data.trust_score;
+    let trust = data.ema_trust_score !== null && data.ema_trust_score !== undefined
+        ? data.ema_trust_score
+        : data.trust_score;
     const band  = data.trust_band;  // "trusted" | "suspicious" | "fraud"
 
     if (trust === null || trust === undefined) {
@@ -1039,9 +1067,23 @@ function applyLiveData(data) {
     document.getElementById('srStatus').textContent =
         'Trust score ' + trust + ' out of 100, ' + s.text + '. ' + (data.reason || '');
 
+    // ── Conflict Alert Banner (Week 3 Day 4) ────
+    const conflictAlert = document.getElementById('conflictAlert');
+    const conflictText = document.getElementById('conflictText');
+    if (data.conflict_detected && conflictAlert) {
+        conflictAlert.classList.add('visible');
+        const ct = (data.conflict_types || []).join(', ')
+            .replace(/identity_vs_visual_deepfake/g, 'identity matched but visual deepfake risk is elevated')
+            .replace(/liveness_vs_injection/g, 'liveness passed but injection risk is high');
+        conflictText.textContent = 'Conflicting signals detected — ' + ct;
+    } else if (conflictAlert) {
+        conflictAlert.classList.remove('visible');
+    }
+
     // ── Five signal panels ──────────────────────
     const sig   = data.signals || {};
     const tiers = data.tiers   || {};
+    const missing = data.signal_missing || [];
 
     const PANELS = [
         { id: 0, label: 'Identity',        field: 'identity_score',        tier: tiers.identity        },
@@ -1057,11 +1099,22 @@ function applyLiveData(data) {
         bad:  { chipCls: 'chip-bad',  panelCls: 'panel-bad',  valCls: 'val-bad',  bar: 'linear-gradient(90deg,var(--danger),#f87171)',  chip: 'Alert' }
     };
 
+    // Map field names to module names for signal_missing check
+    const FIELD_TO_MODULE = {
+        'identity_score': 'identity',
+        'liveness_score': 'vision',
+        'visual_deepfake_score': 'vision',
+        'audio_deepfake_score': 'audio',
+        'injection_risk_score': 'security'
+    };
+
     PANELS.forEach(panel => {
         const score    = sig[panel.field];
         const tierKey  = panel.tier || 'warn';
         const style    = TIER_STYLES[tierKey] || TIER_STYLES.warn;
-        const hasScore = score !== null && score !== undefined;
+        const moduleName = FIELD_TO_MODULE[panel.field];
+        const isMissing = missing.includes(moduleName);
+        const hasScore = score !== null && score !== undefined && !isMissing;
 
         const panelEl = document.querySelector('.score-panel:nth-child(' + (panel.id + 1) + ')');
         if (panelEl) {
@@ -1096,6 +1149,16 @@ function applyLiveData(data) {
                 ? panel.label + ' score: ' + Math.round(score)
                 : 'Awaiting ' + panel.label.toLowerCase() + ' module...';
         }
+
+        // Show/hide spinner for missing signals (audio panel already has one)
+        if (panel.field === 'audio_deepfake_score') {
+            const spinner = document.getElementById('audioSpinner');
+            const footerText = document.getElementById('audioFooterText');
+            if (spinner && footerText) {
+                spinner.style.display = isMissing ? 'inline-block' : 'none';
+                footerText.textContent = isMissing ? 'Audio module not yet connected' : (hasScore ? panel.label + ' score: ' + Math.round(score) : 'Awaiting audio module...');
+            }
+        }
     });
 
     // ── Liveness challenge detail (Day 4) ───────
@@ -1106,11 +1169,66 @@ function applyLiveData(data) {
     renderIdentityDetail(data.identity);
     renderSessionLog(data.session_log);
 
+    // ── Visual deepfake panel extras (Week 3 Day 1) ────
+    const rawVision = data.raw && data.raw.vision ? data.raw.vision : {};
+    const visualConf = document.getElementById('visualConfidence');
+    const visualFace = document.getElementById('visualFaceState');
+    const visualCascade = document.getElementById('visualCascade');
+    if (visualConf && rawVision.confidence) {
+        visualConf.style.display = 'inline-block';
+        visualConf.textContent = rawVision.confidence;
+        visualConf.className = 'panel-badge badge-' + (rawVision.confidence === 'high' ? 'high' : 'low');
+    } else if (visualConf) {
+        visualConf.style.display = 'none';
+    }
+    if (visualFace) {
+        if (rawVision.face_detected === false) {
+            visualFace.textContent = 'No face detected — analysis suspended';
+            visualFace.style.color = '#f2b8b8';
+        } else {
+            visualFace.textContent = 'Face detected';
+            visualFace.style.color = '#8b95b5';
+        }
+    }
+    if (visualCascade && rawVision.cascade_stage_avg) {
+        visualCascade.style.display = 'block';
+        visualCascade.querySelector('.cascade-tooltip').textContent = rawVision.cascade_stage_avg;
+    } else if (visualCascade) {
+        visualCascade.style.display = 'none';
+    }
+
+    // ── Audio waveform visualiser (Week 3 Day 2) ────
+    const waveCanvas = document.getElementById('audioWaveform');
+    if (waveCanvas) {
+        const ctx = waveCanvas.getContext('2d');
+        const w = waveCanvas.width;
+        const h = waveCanvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = 'var(--bg-tertiary, #1a2236)';
+        ctx.fillRect(0, 0, w, h);
+        // Draw a simulated amplitude waveform (will be replaced with real audio data when connected)
+        const hasAudio = sig.audio_deepfake_score !== null && sig.audio_deepfake_score !== undefined;
+        if (hasAudio) {
+            ctx.strokeStyle = sig.audio_deepfake_score >= 80 ? 'var(--success, #22c97a)' : sig.audio_deepfake_score >= 50 ? 'var(--warning, #f6c842)' : 'var(--danger, #ff5a5a)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (let x = 0; x < w; x++) {
+                const normalized = (sig.audio_deepfake_score || 50) / 100;
+                const amp = (1 - normalized) * (h / 2) * 0.8; // higher spoof = more erratic
+                const y = (h / 2) + Math.sin(x * 0.2 + Date.now() * 0.005) * amp * (0.5 + Math.random() * 0.5);
+                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+    }
+
     // ── Modules reporting count ─────────────────
     const reporting = data.modules_reporting || [];
+    const missingCount = (data.signal_missing || []).length;
     document.getElementById('sessionIdText').textContent =
         'Session ID: ' + generateSessionId() +
-        ' · ' + reporting.length + '/3 modules active';
+        ' · ' + reporting.length + '/4 modules active' +
+        (missingCount > 0 ? ' · ' + missingCount + ' missing' : '');
 }
 
 // ── Cycle button now sends a test payload ───
@@ -1178,6 +1296,28 @@ document.getElementById('cycleBtn').addEventListener('click', async () => {
         console.error('Test payload send failed:', err);
     }
 });
+
+// ── Audio waveform animation loop (Week 3 Day 2) ────
+(function animateWaveform(){
+    const canvas = document.getElementById('audioWaveform');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg-tertiary') || '#1a2236';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#3a4468';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = 0; x < w; x++) {
+            const y = (h / 2) + Math.sin(x * 0.15 + Date.now() * 0.003) * (h / 6) * (0.6 + Math.random() * 0.4);
+            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+    requestAnimationFrame(animateWaveform);
+})();
 
 // ── Boot sequence ───────────────────────────
 updateViewportLabel();
