@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 
 import cv2
 import numpy as np
+import argparse
+import requests
 
 from vision.face_detector import FaceLandmarkDetector
 from vision.liveness_engine import LivenessChallengeEngine
@@ -46,6 +48,26 @@ class DeepfakeGuardSystem:
         "audio_spoof": 0.20,
         "lip_sync": 0.10,
     }
+    BACKEND_URL = "http://localhost:5000"
+
+    def post_to_backend(self, fusion_json_str):
+        """POST the fusion JSON to the Flask backend's /fusion endpoint.
+        Failures are logged but never crash the camera loop."""
+        if self.no_backend:
+            return
+        try:
+            resp = requests.post(
+                self.BACKEND_URL + "/fusion",
+                data=fusion_json_str,
+                headers={"Content-Type": "application/json"},
+                timeout=1.0
+            )
+            if resp.status_code != 200:
+                print(f"[WARN] Backend returned {resp.status_code}: {resp.text[:120]}")
+        except requests.exceptions.ConnectionError:
+            pass  # backend not running - silent
+        except Exception as e:
+            print(f"[WARN] Backend post failed: {e}")
 
     def __init__(self):
         print("=" * 60)
@@ -64,6 +86,7 @@ class DeepfakeGuardSystem:
         self.challenge_cooldown = 0
         self.frame_count = 0
         self.use_audio = False
+        self.no_backend = False
         # Rolling buffer of recent per-frame spoof flags. A single noisy
         # frame (bad lighting moment, motion blur) shouldn't be able to
         # trigger a hard DENIED by itself -- we require a clear majority
@@ -375,6 +398,7 @@ class DeepfakeGuardSystem:
                     output = self.generate_json(liveness_payload, vision_payload, deepfake_result,
                                                  audio_result, sync_result, trust_data, anti_spoof_2d_flag)
                     print(f"\n--- FUSION OUTPUT ---\n{output}")
+                    self.post_to_backend(output)
 
                 # ---- rendering ----
                 frame = self.vision_detector.draw_landmarks(frame, faces, vision_payload)
@@ -438,5 +462,10 @@ class DeepfakeGuardSystem:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="DeepfakeGuard Fusion System")
+    parser.add_argument("--no-backend", action="store_true",
+                        help="Disable posting fusion data to the Flask backend")
+    args = parser.parse_args()
     system = DeepfakeGuardSystem()
+    system.no_backend = args.no_backend
     system.run()

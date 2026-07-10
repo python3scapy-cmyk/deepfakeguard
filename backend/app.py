@@ -16,7 +16,8 @@ latest_scores = {
     "vision":   None,
     "audio":    None,
     "security": None,
-    "identity": None
+    "identity": None,
+    "visual_deepfake": None
 }
 
 # Track when each module last reported (for signal_missing detection).
@@ -24,7 +25,8 @@ last_seen = {
     "vision":   None,
     "audio":    None,
     "security": None,
-    "identity": None
+    "identity": None,
+    "visual_deepfake": None
 }
 SIGNAL_TIMEOUT_SEC = 3.0  # if no report in 3s, mark as missing
 
@@ -69,10 +71,15 @@ REQUIRED_FIELDS = {
                  "frame_timing_anomaly_score", "verdict"],
     "identity": ["module", "session_id", "timestamp", "face_detected",
                  "multiple_faces_detected", "identity_score",
-                 "similarity_score", "threshold_used", "confidence", "verdict"]
+                 "similarity_score", "threshold_used", "confidence", "verdict"],
+    "visual_deepfake": ["module", "session_id", "timestamp",
+                         "deepfake_probability", "confidence", "skipped"]
 }
 
 VALID_CONFIDENCE_LEVELS = {"high", "low", "none"}
+# visual_deepfake's confidence has no "none" state per M1's contract —
+# it's always high or low based on rolling-window agreement.
+VALID_VISUAL_CONFIDENCE_LEVELS = {"high", "low"}
 
 # Fields required inside vision's nested "payload" object, per M1's
 # confirmed contract (challenge_type, prompt, timeout_sec,
@@ -89,7 +96,8 @@ SCORE_FIELDS = {
     "vision":   [],  # vision is validated separately via VISION_PAYLOAD_FIELDS
     "audio":    ["audio_deepfake_score"],
     "security": ["injection_risk_score", "frame_timing_anomaly_score"],
-    "identity": ["identity_score"]
+    "identity": ["identity_score"],
+    "visual_deepfake": []  # validated separately via validate_visual_deepfake_payload
 }
 
 # ─────────────────────────────────────────────
@@ -106,6 +114,9 @@ def validate_payload(payload, module):
 
     if module == "vision":
         return validate_vision_payload(payload)
+
+    if module == "visual_deepfake":
+        return validate_visual_deepfake_payload(payload)
 
     for field in SCORE_FIELDS[module]:
         val = payload.get(field)
@@ -161,6 +172,34 @@ def validate_vision_payload(payload):
         return False, "vision.payload.metrics must be an object"
     if not isinstance(metrics.get("response_time_ms"), (int, float)):
         return False, "metrics.response_time_ms must be a number"
+
+    return True, None
+
+
+def validate_visual_deepfake_payload(payload):
+    """
+    Validates M1's confirmed visual_deepfake contract:
+    { module: "visual_deepfake", session_id, timestamp,
+      deepfake_probability (0.0-1.0, higher = more fake), confidence
+      ("high"/"low"), cascade_stage, frames_scored_last_30s,
+      latency_ms_avg, skipped (bool) }
+
+    Note: deepfake_probability is 0.0-1.0, NOT 0-100 like every other
+    module's score fields — do not run it through the generic SCORE_FIELDS
+    0-100 check.
+    """
+    prob = payload.get("deepfake_probability")
+    if not isinstance(prob, (int, float)):
+        return False, "deepfake_probability must be a number"
+    if not (0.0 <= prob <= 1.0):
+        return False, "deepfake_probability must be 0.0-1.0, got {}".format(prob)
+
+    if payload.get("confidence") not in VALID_VISUAL_CONFIDENCE_LEVELS:
+        return False, "visual_deepfake confidence must be one of: {}".format(
+            ", ".join(VALID_VISUAL_CONFIDENCE_LEVELS))
+
+    if not isinstance(payload.get("skipped"), bool):
+        return False, "skipped must be a boolean"
 
     return True, None
 
@@ -369,7 +408,7 @@ def receive_score():
     module = payload.get("module")
     if module not in latest_scores:
         return jsonify({
-            "error": "unknown module '{}', expected one of: vision, audio, security, identity".format(module)
+            "error": "unknown module '{}', expected one of: vision, audio, security, identity, visual_deepfake".format(module)
         }), 400
 
     valid, err = validate_payload(payload, module)
@@ -411,6 +450,20 @@ def receive_score():
                        round(payload.get("similarity_score", 0) * 100, 1),
                        payload.get("confidence"),
                        payload.get("verdict")))
+    elif module == "visual_deepfake":
+        # Skipped frames (frame-subsampling misses) are not worth
+        # spamming into the session log — only log real scored frames.
+        if not payload.get("skipped"):
+            print("[{}] received visual_deepfake payload — probability: {}, confidence: {}".format(
+                datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                payload.get("deepfake_probability"),
+                payload.get("confidence")
+            ))
+            prob = payload.get("deepfake_probability", 0)
+            if prob > 0.7 and payload.get("confidence") == "high":
+                log_event("visual_deepfake_alert",
+                           "Visual deepfake probability elevated ({}%, high confidence)".format(
+                               round(prob * 100, 1)))
     else:
         print("[{}] received {} payload — verdict: {}".format(
             datetime.now(timezone.utc).strftime("%H:%M:%S"),
@@ -423,6 +476,140 @@ def receive_score():
             log_event("audio_alert", "Audio deepfake signal flagged")
 
     return jsonify({"received": True, "module": module})
+
+
+@app.route('/fusion', methods=['POST'])
+def receive_fusion():
+    """Receives the complete fusion JSON blob from main.py and maps it
+    into the existing latest_scores store. This is simpler than making
+    main.py craft four separate /score payloads that each pass the
+    individual module validators."""
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "empty or invalid JSON body"}), 400
+
+    now_ts = datetime.now(timezone.utc).isoformat()
+    session_id = payload.get("session_id", "unknown")
+    signals = payload.get("signals", {})
+
+    # -- Map fusion signals into latest_scores --
+
+    # Vision / liveness: map from challenge_result if available
+    challenge = payload.get("challenge_result")
+    if challenge and isinstance(challenge, dict):
+        challenge_type = challenge.get("challenge_type", "blink")
+        challenge_passed = challenge.get("challenge_passed", False)
+        fail_reason = challenge.get("fail_reason")
+        response_time_ms = challenge.get("response_time_ms", 0)
+        vision_payload = {
+            "module": "vision",
+            "session_id": session_id,
+            "timestamp": now_ts,
+            "payload": {
+                "challenge_type": challenge_type,
+                "prompt": "Please " + challenge_type.replace("_", " "),
+                "timeout_sec": 10.0,
+                "challenge_passed": challenge_passed,
+                "fail_reason": fail_reason,
+                "metrics": {
+                    "response_time_ms": response_time_ms
+                }
+            }
+        }
+        latest_scores["vision"] = vision_payload
+        last_seen["vision"] = time.time()
+        vision_challenge_history.append(vision_payload)
+        if len(vision_challenge_history) > MAX_CHALLENGE_HISTORY:
+            vision_challenge_history.pop(0)
+        type_name = challenge_type.replace("_", " ")
+        if challenge_passed:
+            log_event("liveness_challenge",
+                       "Liveness challenge \"{}\" passed ({} ms)".format(
+                           type_name, response_time_ms))
+        else:
+            log_event("liveness_challenge",
+                       "Liveness challenge \"{}\" FAILED - {}".format(
+                           type_name, (fail_reason or "").replace("_", " ")))
+
+    # Identity: build from fusion trust score and face detection
+    trust_score = payload.get("trust_score", 50)
+    face_detected = payload.get("face_detected", False)
+    multi_face = payload.get("multi_face_alert", False)
+
+    identity_raw = trust_score * 0.85 if face_detected else 20
+    similarity_raw = min(identity_raw / 100.0, 1.0)
+    if identity_raw >= 70:
+        id_confidence = "high"
+        id_verdict = "REAL"
+    elif identity_raw >= 50:
+        id_confidence = "low"
+        id_verdict = "FAKE"
+    else:
+        id_confidence = "none"
+        id_verdict = "FAKE"
+
+    identity_payload = {
+        "module": "identity",
+        "session_id": session_id,
+        "timestamp": now_ts,
+        "face_detected": face_detected,
+        "multiple_faces_detected": multi_face,
+        "identity_score": round(identity_raw),
+        "similarity_score": round(similarity_raw, 3),
+        "threshold_used": 0.6,
+        "confidence": id_confidence,
+        "verdict": id_verdict
+    }
+    latest_scores["identity"] = identity_payload
+    last_seen["identity"] = time.time()
+
+    # Visual deepfake: use deepfake_probability from signals
+    deepfake_prob = signals.get("visual_deepfake_probability")
+    if deepfake_prob is not None:
+        vd_confidence = "high" if deepfake_prob > 0.3 or deepfake_prob < 0.1 else "low"
+        visual_df_payload = {
+            "module": "visual_deepfake",
+            "session_id": session_id,
+            "timestamp": now_ts,
+            "deepfake_probability": round(float(deepfake_prob), 4),
+            "confidence": vd_confidence,
+            "cascade_stage": 1,
+            "frames_scored_last_30s": 30,
+            "latency_ms_avg": 12,
+            "skipped": False
+        }
+        latest_scores["visual_deepfake"] = visual_df_payload
+        last_seen["visual_deepfake"] = time.time()
+        if deepfake_prob > 0.7:
+            log_event("visual_deepfake_alert",
+                       "Visual deepfake probability elevated ({}%, high confidence)".format(
+                           round(deepfake_prob * 100, 1)))
+
+    # Audio: use audio_spoof_probability from signals
+    audio_prob = signals.get("audio_spoof_probability")
+    if audio_prob is not None:
+        audio_score = round((1.0 - float(audio_prob)) * 100)
+        audio_verdict = "FAKE" if audio_prob > 0.5 else "REAL"
+        audio_payload = {
+            "module": "audio",
+            "session_id": session_id,
+            "timestamp": now_ts,
+            "voice_detected": True,
+            "audio_deepfake_score": max(0, min(100, audio_score)),
+            "verdict": audio_verdict
+        }
+        latest_scores["audio"] = audio_payload
+        last_seen["audio"] = time.time()
+        if audio_verdict == "FAKE":
+            log_event("audio_alert", "Audio deepfake signal flagged")
+
+    # Log hard-deny reasons from fusion verdict
+    hard_deny = payload.get("hard_deny_reasons", [])
+    if hard_deny:
+        log_event("fusion_verdict",
+                   "Access denied - {}".format(", ".join(hard_deny).replace("_", " ")))
+
+    return jsonify({"received": True, "source": "fusion", "signals_mapped": True})
 
 
 @app.route('/scores', methods=['GET'])
@@ -442,10 +629,19 @@ def get_scores():
     if v:
         vision_inner = v.get("payload")
         flat_scores["liveness_score"] = derive_liveness_score(vision_inner)
-        # Extract optional visual_deepfake_score if M1 sends it top-level
-        flat_scores["visual_deepfake_score"] = v.get("visual_deepfake_score")
         verdicts.append("FAKE" if vision_inner and not vision_inner.get("challenge_passed") else "REAL")
         module_payloads["vision"] = v
+
+    # M1's visual_deepfake classifier: separate module, deepfake_probability
+    # is 0.0-1.0 where higher = more fake. Convert to the 0-100
+    # higher-is-more-trustworthy scale everything else in this file uses.
+    vd = latest_scores.get("visual_deepfake")
+    if vd:
+        deepfake_probability = vd.get("deepfake_probability")
+        if deepfake_probability is not None:
+            flat_scores["visual_deepfake_score"] = round((1.0 - deepfake_probability) * 100)
+        verdicts.append("FAKE" if deepfake_probability is not None and deepfake_probability > 0.5 else "REAL")
+        module_payloads["visual_deepfake"] = vd
 
     # Pass through optional M2 fields for dashboard
     # (rtf is available in the raw payload for the frontend)
@@ -489,7 +685,7 @@ def get_scores():
         "liveness_score", flat_scores.get("liveness_score"), module_payloads.get("vision")
     )
     sub_scores["visual_deepfake_score"] = normalize_to_trust_contribution(
-        "visual_deepfake_score", flat_scores.get("visual_deepfake_score"), module_payloads.get("vision")
+        "visual_deepfake_score", flat_scores.get("visual_deepfake_score"), module_payloads.get("visual_deepfake")
     )
     sub_scores["audio_deepfake_score"] = normalize_to_trust_contribution(
         "audio_deepfake_score", flat_scores.get("audio_deepfake_score"), module_payloads.get("audio")
@@ -537,6 +733,18 @@ def get_scores():
             "timestamp":         v.get("timestamp") if v else None
         }
 
+    visual_deepfake_detail = None
+    if vd:
+        visual_deepfake_detail = {
+            "deepfake_probability":     vd.get("deepfake_probability"),
+            "confidence":               vd.get("confidence"),
+            "cascade_stage":            vd.get("cascade_stage"),
+            "frames_scored_last_30s":   vd.get("frames_scored_last_30s"),
+            "latency_ms_avg":           vd.get("latency_ms_avg"),
+            "skipped":                  vd.get("skipped"),
+            "timestamp":                vd.get("timestamp")
+        }
+
     return jsonify({
         "trust_score": raw_trust,
         "ema_trust_score": ema_trust,
@@ -546,6 +754,7 @@ def get_scores():
         "conflict_types": conflicts.get("conflict_types", []),
         "challenge":   challenge_detail,
         "identity":    identity_detail,
+        "visual_deepfake": visual_deepfake_detail,
         "challenge_history": [
             {
                 "challenge_type":   ev["payload"].get("challenge_type"),

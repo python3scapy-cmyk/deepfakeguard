@@ -407,29 +407,29 @@
             <div class="trust-score-band prominent">
                 <div class="trust-header">
                     <h2 class="trust-title">Overall Trust Score</h2>
-                    <span class="trust-status status-suspicious" id="trustStatus">Suspicious</span>
+                    <span class="trust-status" id="trustStatus" style="background:rgba(124,136,171,0.15);color:#7c88ab;">Awaiting</span>
                 </div>
                 <div class="score-gauge">
                     <div class="score-ring-container">
                         <svg viewBox="0 0 88 88" role="img" aria-hidden="true">
                             <circle class="ring-bg" cx="44" cy="44" r="36"/>
-                            <circle class="ring-fill" cx="44" cy="44" r="36" id="ringFill" stroke="var(--warning)" style="stroke-dashoffset:63.28"/>
+                            <circle class="ring-fill" cx="44" cy="44" r="36" id="ringFill" stroke="#7c88ab" style="stroke-dashoffset:226"/>
                         </svg>
                         <div class="ring-label" id="ringLabel" aria-hidden="true">
-                            <span id="trustScore">72</span>
+                            <span id="trustScore">&mdash;</span>
                             <small>/100</small>
                         </div>
                     </div>
                     <div class="score-segments">
                         <div class="segment-bar">
                             <span class="segment-label">Trusted</span>
-                            <div class="segment-track"><div class="segment-fill fill-trusted" id="segTrusted" style="width:0%"></div></div>
+                            <div class="segment-track"><div class="segment-fill fill-trusted" id="segTrusted" style="width:0%;"></div></div>
                             <span class="segment-pct" id="pctTrusted">&mdash;</span>
                         </div>
                         <div class="segment-bar">
                             <span class="segment-label">Suspicious</span>
-                            <div class="segment-track"><div class="segment-fill fill-suspicious" id="segSuspicious" style="width:72%"></div></div>
-                            <span class="segment-pct" id="pctSuspicious">72%</span>
+                            <div class="segment-track"><div class="segment-fill fill-suspicious" id="segSuspicious" style="width:0%;"></div></div>
+                            <span class="segment-pct" id="pctSuspicious">&mdash;</span>
                         </div>
                         <div class="segment-bar">
                             <span class="segment-label">Fraud</span>
@@ -439,21 +439,21 @@
                     </div>
                 </div>
                 <div class="trust-gradient-bar">
-                    <div class="trust-gradient-needle" id="trustNeedle" style="left:72%"></div>
+                    <div class="trust-gradient-needle" id="trustNeedle" style="left:50%"></div>
                 </div>
                 <div class="trust-bar-labels"><span>Fraud</span><span>Suspicious</span><span>Trusted</span></div>
                 <div class="reason-area" id="reasonArea">
                     <span class="reason-icon" id="reasonIcon" aria-hidden="true">&#x26A0;&#xFE0F;</span>
-                    <span id="reasonText">Score reduced due to elevated injection-risk signal and anomalous audio patterns detected in frequency analysis.</span>
+                    <span id="reasonText">Awaiting signals &mdash; no modules have reported yet.</span>
                 </div>
                 <button class="cycle-btn" id="cycleBtn">Cycle test scenario &rarr; (showing simulated data)</button>
             </div>
             <div class="scores-grid">
-                <div class="score-panel panel-good">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Identity</h3><span class="score-chip chip-good" id="chip0">Pass</span></div>
-                    <div class="score-panel-value val-good" id="val0">92</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:92%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
-                    <div class="score-panel-footer" id="foot0">ID document verified</div>
+                <div class="score-panel panel-pending">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Identity</h3><span class="score-chip chip-pending" id="chip0">Pending</span></div>
+                    <div class="score-panel-value" id="val0" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot0">Awaiting identity module&hellip;</div>
                     <div class="identity-detail" id="identityDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
                         <div style="display:flex;justify-content:space-between;color:#8b95b5;">
                             <span id="identitySimilarity">Similarity: &mdash;</span>
@@ -462,11 +462,11 @@
                         <div id="identityMultiFaceWarning" style="display:none;color:#f2b8b8;margin-top:4px;font-weight:600;">&#9888; Multiple faces detected</div>
                     </div>
                 </div>
-                <div class="score-panel panel-good">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-good" id="chip1">Pass</span></div>
-                    <div class="score-panel-value val-good" id="val1">88</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:88%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
-                    <div class="score-panel-footer" id="foot1">Challenge passed</div>
+                <div class="score-panel panel-pending">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-pending" id="chip1">Pending</span></div>
+                    <div class="score-panel-value" id="val1" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot1">Awaiting liveness module&hellip;</div>
                     <div class="liveness-detail" id="livenessDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
                         <div id="livenessPrompt" style="font-weight:600;color:var(--text-primary,#e8edf8);margin-bottom:4px;">Waiting for challenge&hellip;</div>
                         <div style="display:flex;justify-content:space-between;color:#8b95b5;">
@@ -475,11 +475,11 @@
                         </div>
                     </div>
                 </div>
-                <div class="score-panel panel-warn" id="visualPanel">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-warn" id="chip2">Review</span><span class="panel-badge badge-low" id="visualConfidence" style="display:none;">Low</span></div>
-                    <div class="score-panel-value val-warn" id="val2">65</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:65%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
-                    <div class="score-panel-footer" id="foot2">Minor artifacts detected</div>
+                <div class="score-panel panel-pending" id="visualPanel">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-pending" id="chip2">Pending</span><span class="panel-badge badge-low" id="visualConfidence" style="display:none;">Low</span></div>
+                    <div class="score-panel-value" id="val2" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot2">Awaiting visual deepfake module&hellip;</div>
                     <div class="visual-detail" id="visualDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
                         <div id="visualFaceState" style="color:#8b95b5;">Face detected</div>
                         <div id="visualCascade" style="color:#5a6484;margin-top:2px;display:none;">Cascade: <span class="cascade-tooltip" title="Average cascade stage (1 = cheap texture check, 2 = full EfficientNet)">1.4</span></div>
@@ -495,15 +495,15 @@
                     </div>
                     <canvas class="waveform-canvas" id="audioWaveform" width="200" height="40"></canvas>
                 </div>
-                <div class="score-panel panel-bad panel-injection">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-bad" id="chip4">Alert</span></div>
-                    <div class="score-panel-value val-bad" id="val4">45</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar4" style="width:45%;background:linear-gradient(90deg,var(--danger),#f87171)"></div></div>
-                    <div class="score-panel-footer" id="foot4">Unusual frame timing &mdash; possible replay attack</div>
+                <div class="score-panel panel-pending panel-injection">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-pending" id="chip4">Pending</span></div>
+                    <div class="score-panel-value" id="val4" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar4" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot4">Awaiting security module&hellip;</div>
                     <div class="injection-detail">
-                        <div class="injection-stat"><div class="injection-stat-label">Frame timing deviation</div><div class="injection-stat-value" style="color:var(--danger)">+340ms anomaly</div></div>
-                        <div class="injection-stat"><div class="injection-stat-label">Replay confidence</div><div class="injection-stat-value" style="color:var(--warning)">64%</div></div>
-                        <div class="injection-stat"><div class="injection-stat-label">Signal type</div><div class="injection-stat-value">Frame injection</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Frame timing deviation</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Replay confidence</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Signal type</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
                     </div>
                 </div>
             </div>
@@ -1103,7 +1103,7 @@ function applyLiveData(data) {
     const FIELD_TO_MODULE = {
         'identity_score': 'identity',
         'liveness_score': 'vision',
-        'visual_deepfake_score': 'vision',
+        'visual_deepfake_score': 'visual_deepfake',
         'audio_deepfake_score': 'audio',
         'injection_risk_score': 'security'
     };
@@ -1170,29 +1170,44 @@ function applyLiveData(data) {
     renderSessionLog(data.session_log);
 
     // ── Visual deepfake panel extras (Week 3 Day 1) ────
-    const rawVision = data.raw && data.raw.vision ? data.raw.vision : {};
+    // Reads from data.visual_deepfake — M1's real "visual_deepfake" module
+    // payload (deepfake_probability, confidence, cascade_stage, latency,
+    // skipped) — NOT data.raw.vision, which is M1's separate Week 2
+    // liveness-challenge module and never carries these fields.
+    const vdf = data.visual_deepfake;
     const visualConf = document.getElementById('visualConfidence');
     const visualFace = document.getElementById('visualFaceState');
     const visualCascade = document.getElementById('visualCascade');
-    if (visualConf && rawVision.confidence) {
+
+    if (visualConf && vdf && vdf.confidence) {
         visualConf.style.display = 'inline-block';
-        visualConf.textContent = rawVision.confidence;
-        visualConf.className = 'panel-badge badge-' + (rawVision.confidence === 'high' ? 'high' : 'low');
+        visualConf.textContent = vdf.confidence;
+        visualConf.className = 'panel-badge badge-' + (vdf.confidence === 'high' ? 'high' : 'low');
     } else if (visualConf) {
         visualConf.style.display = 'none';
     }
+
     if (visualFace) {
-        if (rawVision.face_detected === false) {
-            visualFace.textContent = 'No face detected — analysis suspended';
-            visualFace.style.color = '#f2b8b8';
-        } else {
-            visualFace.textContent = 'Face detected';
+        if (!vdf) {
+            visualFace.textContent = 'Awaiting visual deepfake module...';
             visualFace.style.color = '#8b95b5';
+        } else if (vdf.skipped) {
+            visualFace.textContent = 'Frame skipped (subsampling) — showing last scored value';
+            visualFace.style.color = '#7c88ab';
+        } else {
+            const pct = (vdf.deepfake_probability * 100).toFixed(1);
+            visualFace.textContent = 'Deepfake probability: ' + pct + '%';
+            visualFace.style.color = vdf.deepfake_probability > 0.5 ? '#f2b8b8' : '#8b95b5';
         }
     }
-    if (visualCascade && rawVision.cascade_stage_avg) {
+
+    if (visualCascade && vdf && vdf.cascade_stage !== null && vdf.cascade_stage !== undefined) {
         visualCascade.style.display = 'block';
-        visualCascade.querySelector('.cascade-tooltip').textContent = rawVision.cascade_stage_avg;
+        const stageLabel = vdf.cascade_stage === 0 ? 'skipped' : vdf.cascade_stage === 1 ? '1 (texture)' : '2 (EfficientNet)';
+        visualCascade.querySelector('.cascade-tooltip').textContent = stageLabel;
+        if (vdf.latency_ms_avg !== null && vdf.latency_ms_avg !== undefined && vdf.latency_ms_avg > 0) {
+            visualCascade.querySelector('.cascade-tooltip').textContent += ' · ' + vdf.latency_ms_avg + 'ms';
+        }
     } else if (visualCascade) {
         visualCascade.style.display = 'none';
     }
