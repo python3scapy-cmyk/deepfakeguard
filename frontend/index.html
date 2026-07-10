@@ -200,14 +200,14 @@
       &bull; A voice embedding of the participant (not a recording)<br>
       &bull; Video stream metadata for liveness verification</p>
 
-      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>How long data is kept:</strong> Session only. Embeddings are discarded when the session ends. Nothing is written to disk or sent to a server.</p>
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>How long data is kept:</strong> The participant's one-time enrollment face embedding is saved to disk so they don't have to re-enroll every session. Everything else in this session — live embeddings and metadata — is session-only and discarded when it ends. Nothing else is written to disk or sent to a server.</p>
 
       <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>Your responsibility as verifier:</strong><br>
       &bull; Use this session only for its stated identity-verification purpose.<br>
       &bull; End the session promptly once verification is complete.</p>
 
       <div style="background: #1c2340; border-left: 3px solid #4f6bff; padding: 12px 14px; margin: 16px 0; font-size: 13px; line-height: 1.5; color: #c9d2ea;">
-        <strong>BIOMETRIC DATA NOTICE:</strong> This session involves biometric identifiers (face and voice embeddings) belonging to another individual, collected to verify their identity and detect deepfake impersonation. This data will be retained only for the duration of this session and will be permanently deleted when the session ends.
+        <strong>BIOMETRIC DATA NOTICE:</strong> This session involves biometric identifiers belonging to another individual — a persisted enrollment face embedding, plus in-session face and voice embeddings — collected to verify their identity and detect deepfake impersonation. The enrollment embedding is kept on disk until the participant deletes it or re-enrolls. All other session data is retained only for the duration of this session and deleted when it ends.
       </div>
 
       <p style="font-size: 12px; color: #7c88ab;">

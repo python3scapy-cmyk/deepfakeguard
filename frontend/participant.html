@@ -35,14 +35,15 @@
 
         <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>Why:</strong> To verify your identity and detect deepfake impersonation in real time.</p>
 
-        <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>How long we keep it:</strong> Session only. Embeddings are discarded when the session ends. Nothing is written to disk or sent to a server.</p>
+        <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>How long we keep it:</strong> Your one-time enrollment face embedding is saved to disk so you don't have to re-enroll every session. Everything else — live video/audio embeddings and session metadata — is session-only and discarded when the session ends. Nothing else is written to disk or sent to a server.</p>
 
         <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>Your rights:</strong><br>
         &bull; You may withdraw consent at any time by ending the session.<br>
-        &bull; You may request deletion of any session data.</p>
+        &bull; You may request deletion of any in-session data (deleted automatically when the session ends).<br>
+        &bull; You may also request deletion of your persisted enrollment embedding at any time — this requires a manual step, since it's designed to persist across sessions.</p>
 
         <div style="background: #1c2340; border-left: 3px solid #4f6bff; padding: 12px 14px; margin: 16px 0; font-size: 13px; line-height: 1.5; color: #c9d2ea;">
-          <strong>BIOMETRIC DATA NOTICE:</strong> We are collecting biometric identifiers (face and voice embeddings) to verify your identity and detect deepfake impersonation. This data will be retained only for the duration of this session and will be permanently deleted when the session ends. You may withdraw consent at any time by ending the session.
+          <strong>BIOMETRIC DATA NOTICE:</strong> We are collecting biometric identifiers (a persisted enrollment face embedding, plus in-session face and voice embeddings) to verify your identity and detect deepfake impersonation. The enrollment embedding is kept on disk until you delete it or re-enroll. All other session data is retained only for the duration of this session and deleted when it ends. You may withdraw consent at any time by ending the session, and may request deletion of your stored enrollment embedding at any time.
         </div>
 
         <p style="font-size: 12px; color: #7c88ab;">
