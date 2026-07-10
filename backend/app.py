@@ -36,6 +36,14 @@ SIGNAL_TIMEOUT_SEC = 3.0  # if no report in 3s, mark as missing
 vision_challenge_history = []
 MAX_CHALLENGE_HISTORY = 20
 
+# Most recent hard-deny reasons from main.py's fusion verdict (e.g.
+# no_face_detected, multiple_faces, 2d_spoof_detected_sustained,
+# virtual_camera_detected). These override the weighted-average band --
+# see compute_trust()'s "forced_band" handling below.
+_latest_hard_deny_reasons = []
+_hard_deny_last_seen = None
+HARD_DENY_TIMEOUT_SEC = 3.0  # a hard-deny is only binding while still fresh
+
 # ─────────────────────────────────────────────
 # Session event log — the audit trail behind the
 # dashboard's session-log view. Every /score POST
@@ -247,12 +255,33 @@ def normalize_to_trust_contribution(field, raw_score, payload=None):
     return round(trust, 2)
 
 
+def get_active_hard_deny_reasons():
+    """Returns the current hard-deny reasons from main.py's fusion verdict,
+    but only if they're still fresh (within HARD_DENY_TIMEOUT_SEC). A stale
+    hard-deny (main.py stopped posting, or the condition cleared several
+    seconds ago) should not permanently pin the session at fraud."""
+    if _hard_deny_last_seen is None:
+        return []
+    if (time.time() - _hard_deny_last_seen) > HARD_DENY_TIMEOUT_SEC:
+        return []
+    return _latest_hard_deny_reasons
+
+
 def compute_trust(scores, sub_scores):
     """
     Fuses all available module scores into one
     0–100 trust score and a band label.
     Uses the Week 3 weights: identity 0.25, liveness 0.25, visual 0.20,
     audio 0.20, injection 0.10. Missing signals use neutral 0.5.
+
+    Hard-deny override (fix #2): if main.py's fusion verdict reported a
+    hard-deny reason (no face, multiple faces, sustained 2D spoof, or a
+    detected virtual camera) and it's still fresh, the band is forced to
+    "fraud" regardless of the weighted average. Previously this data was
+    only ever written to the session log -- a weighted average could still
+    land in "Trusted"/"Suspicious" territory even while main.py's own
+    verdict was ACCESS DENIED, which is exactly the kind of disagreement
+    between the local overlay and the dashboard this fix removes.
     """
     weights = {
         "identity_score":        0.25,
@@ -270,14 +299,17 @@ def compute_trust(scores, sub_scores):
     trust = round(weighted_sum * 100)
     trust = max(0, min(100, trust))
 
-    if trust >= 80:
+    hard_deny_reasons = get_active_hard_deny_reasons()
+    if hard_deny_reasons:
+        band = "fraud"
+    elif trust >= 80:
         band = "trusted"
     elif trust >= 50:
         band = "suspicious"
     else:
         band = "fraud"
 
-    return trust, band
+    return trust, band, hard_deny_reasons
 
 
 def apply_ema(new_trust):
@@ -315,14 +347,31 @@ def detect_conflicts(flat_scores):
     return {"conflict_detected": len(conflicts) > 0, "conflict_types": conflicts}
 
 
+HARD_DENY_DISPLAY = {
+    "no_face_detected":            "no face detected in frame",
+    "multiple_faces":              "multiple faces detected in frame",
+    "2d_spoof_detected_sustained": "sustained 2D spoof pattern detected (printed photo or screen replay)",
+    "virtual_camera_detected":     "virtual camera / injected video source detected",
+}
+
+
 def build_reason(scores, verdicts, vision_fail_reason=None, identity_confidence=None,
-                 conflicts=None):
+                 conflicts=None, hard_deny_reasons=None):
     """
     Builds a human-readable reason string based on
     which signals are flagged, for the dashboard
     explainability area.
+
+    Hard-deny reasons are surfaced FIRST (fix #2) since they're the actual
+    reason the fused verdict is "fraud" when a hard-deny is active --
+    burying them below softer score-based flags would misrepresent why
+    the session was denied.
     """
     flags = []
+
+    if hard_deny_reasons:
+        for reason in hard_deny_reasons:
+            flags.append("hard block — " + HARD_DENY_DISPLAY.get(reason, reason.replace("_", " ")))
 
     if conflicts and conflicts.get("conflict_detected"):
         for ct in conflicts.get("conflict_types", []):
@@ -531,13 +580,22 @@ def receive_fusion():
                        "Liveness challenge \"{}\" FAILED - {}".format(
                            type_name, (fail_reason or "").replace("_", " ")))
 
-    # Identity: build from fusion trust score and face detection
+    # Identity: prefer main.py's real ArcFace signal (signals.identity_similarity),
+    # since main.py now computes this via security.identity.IdentityMatcher
+    # instead of a hardcoded constant. Falls back to the old trust_score-derived
+    # approximation only if main.py hasn't sent a real identity signal yet.
     trust_score = payload.get("trust_score", 50)
     face_detected = payload.get("face_detected", False)
     multi_face = payload.get("multi_face_alert", False)
 
-    identity_raw = trust_score * 0.85 if face_detected else 20
-    similarity_raw = min(identity_raw / 100.0, 1.0)
+    identity_similarity = signals.get("identity_similarity")
+    if identity_similarity is not None:
+        similarity_raw = float(identity_similarity)
+        identity_raw = similarity_raw * 100
+    else:
+        identity_raw = trust_score * 0.85 if face_detected else 20
+        similarity_raw = min(identity_raw / 100.0, 1.0)
+
     if identity_raw >= 70:
         id_confidence = "high"
         id_verdict = "REAL"
@@ -603,8 +661,32 @@ def receive_fusion():
         if audio_verdict == "FAKE":
             log_event("audio_alert", "Audio deepfake signal flagged")
 
-    # Log hard-deny reasons from fusion verdict
+    # Security / injection: use injection_risk_score + virtual_camera_detected
+    # from signals, now that main.py actually wires in security_module (fix #3).
+    injection_risk_score = signals.get("injection_risk_score")
+    virtual_camera_detected = signals.get("virtual_camera_detected")
+    if injection_risk_score is not None:
+        security_payload = {
+            "module": "security",
+            "session_id": session_id,
+            "timestamp": now_ts,
+            "virtual_camera_detected": bool(virtual_camera_detected),
+            "device_name": "reported via main.py fusion",
+            "injection_risk_score": max(0, min(100, round(injection_risk_score))),
+            "frame_timing_anomaly_score": max(0, min(100, round(100 - injection_risk_score))),
+            "verdict": "FAKE" if virtual_camera_detected or injection_risk_score < 50 else "REAL"
+        }
+        latest_scores["security"] = security_payload
+        last_seen["security"] = time.time()
+        if virtual_camera_detected:
+            log_event("injection_alert", "Virtual camera / injection signature detected")
+
+    # Hard-deny reasons (fix #1 + #2): these now actually override the
+    # weighted-average band in compute_trust(), not just get logged.
+    global _latest_hard_deny_reasons, _hard_deny_last_seen
     hard_deny = payload.get("hard_deny_reasons", [])
+    _latest_hard_deny_reasons = hard_deny
+    _hard_deny_last_seen = time.time() if hard_deny else _hard_deny_last_seen
     if hard_deny:
         log_event("fusion_verdict",
                    "Access denied - {}".format(", ".join(hard_deny).replace("_", " ")))
@@ -617,7 +699,9 @@ def get_scores():
     """
     Returns all latest module signals plus a fused trust score computed
     server-side. Uses Week 3 weights, EMA smoothing, conflict detection,
-    and missing-signal handling. This is what the dashboard polls.
+    hard-deny override, and missing-signal handling. This is what the
+    dashboard polls, and what main.py's on-screen overlay now also polls
+    (see fix #1) so the two never show a different number.
     """
     # Flatten all scores into one dict for fusion
     flat_scores = {}
@@ -694,8 +778,10 @@ def get_scores():
         "injection_risk_score", flat_scores.get("injection_risk_score"), module_payloads.get("security")
     )
 
-    # Compute raw trust, then apply EMA smoothing
-    raw_trust, band = compute_trust(flat_scores, sub_scores)
+    # Compute raw trust, then apply EMA smoothing.
+    # compute_trust() now also returns the active hard-deny reasons so
+    # build_reason() can surface them (fix #1 + #2).
+    raw_trust, band, hard_deny_reasons = compute_trust(flat_scores, sub_scores)
     ema_trust = apply_ema(raw_trust) if raw_trust is not None else None
 
     # Conflict detection
@@ -718,7 +804,8 @@ def get_scores():
             flat_scores, verdicts,
             vision_inner.get("fail_reason") if vision_inner else None,
             identity_detail.get("confidence") if identity_detail else None,
-            conflicts=conflicts
+            conflicts=conflicts,
+            hard_deny_reasons=hard_deny_reasons
         )
 
     challenge_detail = None
@@ -752,6 +839,7 @@ def get_scores():
         "reason":      reason,
         "conflict_detected": conflicts.get("conflict_detected", False),
         "conflict_types": conflicts.get("conflict_types", []),
+        "hard_deny_reasons": hard_deny_reasons,
         "challenge":   challenge_detail,
         "identity":    identity_detail,
         "visual_deepfake": visual_deepfake_detail,
@@ -807,7 +895,7 @@ def reset_session():
     "session reset" button so multiple demo scenarios can be run
     back-to-back without restarting the whole backend.
     """
-    global _last_trust_band, _ema_trust_score
+    global _last_trust_band, _ema_trust_score, _latest_hard_deny_reasons, _hard_deny_last_seen
     for key in latest_scores:
         latest_scores[key] = None
     for key in last_seen:
@@ -816,6 +904,8 @@ def reset_session():
     session_log.clear()
     _last_trust_band = None
     _ema_trust_score = None
+    _latest_hard_deny_reasons = []
+    _hard_deny_last_seen = None
     log_event("session_reset", "Session was reset.")
     return jsonify({"reset": True})
 

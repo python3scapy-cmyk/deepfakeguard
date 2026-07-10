@@ -9,3 +9,23 @@ torch
 torchvision
 transformers
 pillow
+
+# Identity matching (ArcFace) -- used by security/enroll.py, security/verify.py,
+# and security/identity.py (imported directly by main.py as of Week 3 fix #4)
+insightface
+onnxruntime
+
+# Real microphone capture for main.py's audio pipeline (fix #5) -- replaces
+# the mock np.random.rand() audio previously fed into lip-sync/AASIST.
+sounddevice
+
+# Flask backend (backend/app.py) -- previously undeclared here even though
+# the backend depends on all three.
+flask
+flask-socketio
+flask-cors
+
+# Audio spoof training script (audio_module/train_xgb.py)
+xgboost
+kagglehub
+scikit-learn
