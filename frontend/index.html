@@ -798,9 +798,20 @@
             }
         };
 
-        rtcSocket.on('peer-joined', async function(){
-            // index.html (the verifier) is always the offerer, regardless
-            // of which page happened to join the signaling room first.
+// Status-only now -- offer creation is triggered by the
+        // server's 'ready-to-offer' event instead, which fires
+        // deterministically once both roles have joined.
+        rtcSocket.on('peer-joined', function(){
+            if (label) label.textContent = 'Participant joined — negotiating...';
+        });
+
+        rtcSocket.on('ready-to-offer', async function(){
+            var offer = await rtcPc.createOffer();
+            await rtcPc.setLocalDescription(offer);
+            rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
+        });
+
+        rtcSocket.on('peer-already-present', async function(){
             var offer = await rtcPc.createOffer();
             await rtcPc.setLocalDescription(offer);
             rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
@@ -825,7 +836,7 @@
             }
         });
 
-        rtcSocket.emit('join', { room: RTC_ROOM });
+        rtcSocket.emit('join', { room: RTC_ROOM, role: 'verifier' });
         if (label) label.textContent = 'Waiting for participant to join...';
     }
 

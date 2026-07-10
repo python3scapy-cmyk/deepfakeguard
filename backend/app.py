@@ -913,16 +913,43 @@ def reset_session():
 # ─────────────────────────────────────────────
 # WebRTC signaling (unchanged from before)
 # ─────────────────────────────────────────────
+
+# room -> {'verifier': sid or None, 'participant': sid or None}
+# Tracking by ROLE instead of join order makes offerer-selection
+# deterministic: it no longer matters which page loads/joins first,
+# and it also correctly re-fires if one side refreshes mid-session.
+_rooms = {}
+
 @socketio.on('join')
 def on_join(data):
-    room = data['room']
+    room = data.get('room')
+    role = data.get('role')  # 'verifier' or 'participant'
+    if not room or role not in ('verifier', 'participant'):
+        return
+
     join_room(room)
-    emit('peer-joined', {}, room=room, include_self=False)
+    state = _rooms.setdefault(room, {'verifier': None, 'participant': None})
+    state[role] = request.sid
+
+    emit('peer-joined', {'role': role}, room=room, include_self=False)
+
+    # Fire only once both roles are present -- safe to check on EVERY
+    # join, since whichever join completes the pair is the one that
+    # should trigger it.
+    if state['verifier'] and state['participant']:
+        emit('ready-to-offer', {}, room=state['verifier'])
+
+@socketio.on('disconnect')
+def on_disconnect():
+    for state in _rooms.values():
+        for role in ('verifier', 'participant'):
+            if state.get(role) == request.sid:
+                state[role] = None
 
 @socketio.on('offer')
 def on_offer(data):
     emit('offer', data, room=data['room'], include_self=False)
-
+    
 @socketio.on('answer')
 def on_answer(data):
     emit('answer', data, room=data['room'], include_self=False)

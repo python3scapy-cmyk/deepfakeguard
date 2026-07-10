@@ -240,7 +240,7 @@
         else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) setStatus('Disconnected', false);
       };
 
-      socket.emit('join', { room: ROOM });
+      socket.emit('join', { room: ROOM, role: 'participant' });
       setStatus('Waiting for verifier to join...', false);
     }
 
