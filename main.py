@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 import cv2
 import numpy as np
 import argparse
+import sys
 import requests
 
 from vision.face_detector import FaceLandmarkDetector
@@ -339,12 +340,22 @@ class DeepfakeGuardSystem:
                 "audio_spoof_probability": (
                     audio_result["spoof_probability"] if audio_result else None
                 ),
+                "audio_rms_level": (
+                    audio_result.get("rms_level") if audio_result else None
+                ),
+                "audio_rms_level": (
+                    audio_result.get("rms_level") if audio_result else None
+                ),
                 "lip_sync_score": sync_result.get("lip_sync_score"),
                 "anti_spoof_2d_raw": spoof_analysis.get("is_spoof", False),
                 "anti_spoof_2d_sustained": anti_spoof_2d_flag,
                 "identity_similarity": identity_result.get("similarity_score") if identity_result else None,
                 "injection_risk_score": injection_result.get("injection_risk_score") if injection_result else None,
                 "virtual_camera_detected": injection_result.get("virtual_camera_detected") if injection_result else None,
+            },
+            "model_backends": {
+                "visual_deepfake": getattr(self.deepfake_detector, "backend", None) or "mock",
+                "audio_spoof": getattr(self.audio_detector, "backend", None) or "mock",
             },
             "hard_deny_reasons": hard_deny_reasons,
             "verdict": verdict,
@@ -436,7 +447,11 @@ class DeepfakeGuardSystem:
         print("[3] Auto-generated test video (no camera needed)")
         choice = input("\nSelect: ").strip()
 
-        self.use_audio = input("Enable real microphone audio pipeline too? (y/N): ").strip().lower() == "y"
+        if getattr(self, "force_audio", False):
+            self.use_audio = True
+            print("Audio pipeline: ENABLED (--audio)")
+        else:
+            self.use_audio = input("Enable real microphone audio pipeline too? (y/N): ").strip().lower() == "y"
 
         self._camera_index = 0
         cap = None
@@ -708,7 +723,26 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DeepfakeGuard Fusion System")
     parser.add_argument("--no-backend", action="store_true",
                         help="Disable posting fusion data to the Flask backend")
+    parser.add_argument("--strict", action="store_true",
+                        help="Refuse to start if any detector fell back to a mock")
+    parser.add_argument("--audio", action="store_true",
+                        help="Enable the microphone audio pipeline without prompting")
     args = parser.parse_args()
     system = DeepfakeGuardSystem()
     system.no_backend = args.no_backend
+    system.force_audio = args.audio
+
+    vb = getattr(system.deepfake_detector, "backend", None) or "mock"
+    ab = getattr(system.audio_detector, "backend", None) or "mock"
+    mocks = [n for n, b in (("VISUAL", vb), ("AUDIO", ab)) if b == "mock"]
+    print("\n" + "-" * 60)
+    print(f"  visual_deepfake backend : {vb}")
+    print(f"  audio_spoof     backend : {ab}")
+    print("-" * 60)
+    if mocks:
+        print("\n" + "*" * 60)
+        print(f"*** RUNNING WITH MOCK {' + '.join(mocks)} -- NOT DEMO-READY ***")
+        print("*" * 60 + "\n")
+        if args.strict:
+            sys.exit("[FATAL] --strict set: refusing to run with a mock detector.")
     system.run()

@@ -149,6 +149,8 @@ class AASISTDetector:
             "model_backend": self.backend,
             "rtf": round(rtf, 3),
             "latency_ms": round(latency * 1000, 1),
+            "rms_level": float(np.sqrt(np.mean(audio_chunk ** 2))),
+            "rms_level": float(np.sqrt(np.mean(audio_chunk ** 2))),
             "audio_quality": "clean" if np.std(audio_chunk) > 0.01 else "silent_or_noisy",
             "timestamp": time.time(),
         }

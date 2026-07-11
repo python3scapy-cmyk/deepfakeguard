@@ -27,11 +27,10 @@ def start_training():
     # CRITICAL FIX: Ensure both class 0 and class 1 exist before training
     unique_classes = np.unique(y)
     if len(X) == 0 or len(unique_classes) < 2:
-        print("[WARNING] Imbalanced or missing dataset classes. Generating balanced 26-feature data...")
-        X = np.random.rand(100, 26)
-        y = np.random.choice([0, 1], size=100)
-        # Manually force at least one of each to keep XGBoost happy
-        y[0], y[1] = 0, 1
+        raise RuntimeError(
+            f"ASVspoof subset unavailable or single-class (n={len(X)}). "
+            "Refusing to train on fake data."
+        )
     else:
         X, y = np.array(X), np.array(y)
 
