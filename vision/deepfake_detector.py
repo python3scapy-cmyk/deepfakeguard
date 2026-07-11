@@ -44,6 +44,10 @@ class DeepfakeDetector:
         bundled = os.path.join(getattr(cv2.data, "haarcascades", ""), "haarcascade_frontalface_default.xml")
         self.cascade_path = bundled if os.path.exists(bundled) else "haarcascade_frontalface_default.xml"
 
+        self.face_cascade = cv2.CascadeClassifier(self.cascade_path)
+
+        if self.face_cascade.empty():
+            print(f"[WARNING] Could not load Haar cascade from {self.cascade_path}")
         # Priority 1: a local custom checkpoint explicitly passed in (e.g. if
         # someone later trains/exports their own EfficientNet weights).
         if model_path and os.path.exists(model_path):
@@ -132,12 +136,19 @@ class DeepfakeDetector:
         return float(np.random.uniform(0.1, 0.4))
 
     def _detect_face(self, frame):
-        cascade = cv2.CascadeClassifier(self.cascade_path)
-        if cascade.empty():
+        if self.face_cascade.empty():
             return None
+    
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
-        faces = cascade.detectMultiScale(gray, 1.1, 4, minSize=(80, 80))
+    
+        faces = self.face_cascade.detectMultiScale(
+            gray,
+            1.1,
+            4,
+            minSize=(80, 80)
+        )
+    
         return faces
 
     # ---------- output ----------
