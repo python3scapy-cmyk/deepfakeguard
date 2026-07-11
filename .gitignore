@@ -7,3 +7,6 @@ third_party/
 audio_module/models/
 .venv/
 models/
+__pycache__/
+*.pyc
+.venv/
