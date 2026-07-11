@@ -267,21 +267,22 @@ def get_active_hard_deny_reasons():
     return _latest_hard_deny_reasons
 
 
-def compute_trust(scores, sub_scores):
-    """
-    Fuses all available module scores into one
-    0–100 trust score and a band label.
-    Uses the Week 3 weights: identity 0.25, liveness 0.25, visual 0.20,
-    audio 0.20, injection 0.10. Missing signals use neutral 0.5.
+# Conflict penalties (deducted from trust score) -- parity with
+# security/fusion_engine.py's CONFLICT_PENALTIES.
+CONFLICT_PENALTIES = {
+    "identity_vs_visual_deepfake": 0.10,
+    "liveness_vs_injection":       0.30,
+}
 
-    Hard-deny override (fix #2): if main.py's fusion verdict reported a
-    hard-deny reason (no face, multiple faces, sustained 2D spoof, or a
-    detected virtual camera) and it's still fresh, the band is forced to
-    "fraud" regardless of the weighted average. Previously this data was
-    only ever written to the session log -- a weighted average could still
-    land in "Trusted"/"Suspicious" territory even while main.py's own
-    verdict was ACCESS DENIED, which is exactly the kind of disagreement
-    between the local overlay and the dashboard this fix removes.
+# Security hardening: minimum identity trust (0.0-1.0) to reach "trusted".
+IDENTITY_TRUST_THRESHOLD = 0.60
+
+
+def compute_trust(scores, sub_scores, conflicts=None):
+    """
+    Order of operations (must match security/fusion_engine.py exactly):
+        weighted sum -> conflict penalty -> identity cap -> hard-deny
+        override -> band
     """
     weights = {
         "identity_score":        0.25,
@@ -291,14 +292,34 @@ def compute_trust(scores, sub_scores):
         "injection_risk_score":  0.10
     }
 
-    weighted_sum = 0.0
-    for field, weight in weights.items():
-        trust_val = sub_scores.get(field, 0.5)
-        weighted_sum += trust_val * weight
+    # NOTE: use sum() over a generator, NOT a manual += loop.
+    # Python 3.12's sum() uses compensated summation for floats;
+    # a manual loop doesn't get that and can be off-by-one at
+    # boundary values (e.g. 0.5 exactly).
+    weighted_sum = sum(sub_scores.get(field, 0.5) * weight for field, weight in weights.items())
 
-    trust = round(weighted_sum * 100)
+    # NOTE: int() truncation here, NOT round() -- must match
+    # fusion_engine.py's compute_trust_score() exactly, or the two
+    # engines drift apart after the conflict-penalty multiply below.
+    trust = int(weighted_sum * 100)
     trust = max(0, min(100, trust))
 
+    # ---- Conflict penalty ----
+    conflict_types = (conflicts or {}).get("conflict_types", [])
+    conflict_penalty_pct = 0.0
+    if conflict_types:
+        conflict_penalty_pct = max(CONFLICT_PENALTIES.get(c, 0.0) for c in conflict_types)
+        trust = int(trust * (1 - conflict_penalty_pct))
+        trust = max(0, min(100, trust))
+
+    # ---- Identity threshold hardening (cap at 79 / suspicious) ----
+    identity_capped = False
+    identity_trust = sub_scores.get("identity_score", 0.5)
+    if identity_trust < IDENTITY_TRUST_THRESHOLD and trust >= 80:
+        trust = 79
+        identity_capped = True
+
+    # ---- Hard-deny override, then band ----
     hard_deny_reasons = get_active_hard_deny_reasons()
     if hard_deny_reasons:
         band = "fraud"
@@ -309,7 +330,7 @@ def compute_trust(scores, sub_scores):
     else:
         band = "fraud"
 
-    return trust, band, hard_deny_reasons
+    return trust, band, hard_deny_reasons, identity_capped, conflict_penalty_pct
 
 
 def apply_ema(new_trust):
@@ -356,7 +377,8 @@ HARD_DENY_DISPLAY = {
 
 
 def build_reason(scores, verdicts, vision_fail_reason=None, identity_confidence=None,
-                 conflicts=None, hard_deny_reasons=None):
+                 conflicts=None, hard_deny_reasons=None, identity_capped=False,
+                 conflict_penalty_pct=0.0):
     """
     Builds a human-readable reason string based on
     which signals are flagged, for the dashboard
@@ -417,9 +439,17 @@ def build_reason(scores, verdicts, vision_fail_reason=None, identity_confidence=
         flags.insert(0, "one or more modules returned FAKE verdict")
 
     if not flags:
-        return "All signals within normal thresholds. Biometric match confirmed."
+        base_reason = "All signals within normal thresholds. Biometric match confirmed."
+    else:
+        base_reason = "Score reduced — " + "; ".join(flags) + "."
 
-    return "Score reduced — " + "; ".join(flags) + "."
+    if identity_capped:
+        base_reason += " [Identity match below threshold — capped at Suspicious]"
+
+    if conflict_penalty_pct:
+        base_reason += " [Conflict penalty: -{}% applied]".format(int(conflict_penalty_pct * 100))
+
+    return base_reason
 
 
 def get_missing_signals():
@@ -778,16 +808,15 @@ def get_scores():
         "injection_risk_score", flat_scores.get("injection_risk_score"), module_payloads.get("security")
     )
 
-    # Compute raw trust, then apply EMA smoothing.
-    # compute_trust() now also returns the active hard-deny reasons so
-    # build_reason() can surface them (fix #1 + #2).
-    raw_trust, band, hard_deny_reasons = compute_trust(flat_scores, sub_scores)
-    ema_trust = apply_ema(raw_trust) if raw_trust is not None else None
-
-    # Conflict detection
+    # Conflict detection MUST run before compute_trust() now, since the
+    # conflict penalty is applied inside compute_trust().
     conflicts = detect_conflicts(flat_scores)
 
-    # Detect missing signals
+    raw_trust, band, hard_deny_reasons, identity_capped, conflict_penalty_pct = compute_trust(
+        flat_scores, sub_scores, conflicts
+    )
+    ema_trust = apply_ema(raw_trust) if raw_trust is not None else None
+
     signal_missing = get_missing_signals()
 
     global _last_trust_band
@@ -805,7 +834,9 @@ def get_scores():
             vision_inner.get("fail_reason") if vision_inner else None,
             identity_detail.get("confidence") if identity_detail else None,
             conflicts=conflicts,
-            hard_deny_reasons=hard_deny_reasons
+            hard_deny_reasons=hard_deny_reasons,
+            identity_capped=identity_capped,
+            conflict_penalty_pct=conflict_penalty_pct
         )
 
     challenge_detail = None
@@ -839,6 +870,8 @@ def get_scores():
         "reason":      reason,
         "conflict_detected": conflicts.get("conflict_detected", False),
         "conflict_types": conflicts.get("conflict_types", []),
+	"conflict_penalty_applied": conflict_penalty_pct,
+        "identity_capped": identity_capped,
         "hard_deny_reasons": hard_deny_reasons,
         "challenge":   challenge_detail,
         "identity":    identity_detail,
