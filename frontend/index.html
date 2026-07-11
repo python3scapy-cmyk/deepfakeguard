@@ -783,6 +783,9 @@
 
         rtcPc = new RTCPeerConnection(RTC_CONFIG);
 
+	rtcPc.addTransceiver('video', { direction: 'recvonly' });
+	rtcPc.addTransceiver('audio', { direction: 'recvonly' });
+
         // This is the only place this page touches media: receiving the
         // remote participant's tracks and attaching them to the main
         // video element (and mirroring into the PiP window via the
@@ -806,6 +809,7 @@
         });
 
         rtcSocket.on('ready-to-offer', async function(){
+            if (label) label.textContent = 'Participant joined — negotiating...';
             var offer = await rtcPc.createOffer();
             await rtcPc.setLocalDescription(offer);
             rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
