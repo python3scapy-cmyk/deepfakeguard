@@ -160,6 +160,7 @@ class LivenessChallengeEngine:
                     "challenge_passed": False,
                     "reason": "Timeout: no response within 10 seconds",
                     "fail_reason": "timeout",
+                    "fail_reason": None,
                 }
             else:
                 passed, reason = False, ""
