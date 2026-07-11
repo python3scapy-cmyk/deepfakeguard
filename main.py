@@ -556,9 +556,12 @@ class DeepfakeGuardSystem:
                     color = (0, 255, 0) if passed else (0, 0, 255)
                     text = f"CHALLENGE: {challenge['challenge_type']} - {'PASS' if passed else 'FAIL'}"
                     cv2.putText(frame, text, (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                    if passed:
-                        self.challenge_active = False
-                        self.challenge_cooldown = self.frame_count + 60
+                    # PASS və FAIL-dən sonra challenge bitsin
+                    self.challenge_active = False
+                    self.challenge_cooldown = self.frame_count + 60
+
+                    # Engine reset
+                    self.liveness_engine.reset()
                 elif not self.challenge_active and self.frame_count > self.challenge_cooldown:
                     if liveness_payload.get("face_detected") and liveness_payload.get("state") == "IDLE":
                         new_challenge = self.liveness_engine.issue_challenge()
