@@ -1,7 +1,13 @@
 import cv2
 import numpy as np
 import json
+import os
 from insightface.app import FaceAnalysis
+
+DEFAULT_ENROLLED_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "enrolled_face.json"
+)
 
 app = FaceAnalysis(providers=['CPUExecutionProvider'])
 app.prepare(ctx_id=0, det_size=(640, 640))
