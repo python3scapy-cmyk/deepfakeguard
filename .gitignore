@@ -1,2 +1,9 @@
 venv/ 
 .cache/ 
+
+*.pth
+*.onnx
+third_party/
+audio_module/models/
+.venv/
+models/

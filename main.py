@@ -63,7 +63,7 @@ class MicrophoneStream:
     "insufficient_data" handling they already have.
     """
 
-    def __init__(self, sample_rate=16000, max_seconds=2.0):
+    def __init__(self, sample_rate=16000, max_seconds=4.5):
         self.sample_rate = sample_rate
         self.max_samples = int(sample_rate * max_seconds)
         self.buffer = np.zeros(self.max_samples, dtype=np.float32)
@@ -214,7 +214,7 @@ class DeepfakeGuardSystem:
 
         self.vision_detector = FaceLandmarkDetector()
         self.liveness_engine = LivenessChallengeEngine()
-        self.deepfake_detector = DeepfakeDetector()  # pass model_path="models/xxx.pth" once you have real weights
+        self.deepfake_detector = DeepfakeDetector(hf_model_name="models/deepfake-detector-v1")
         self.lip_sync = LipSyncDetector(window_ms=200)
         self.audio_detector = AASISTDetector()
 
@@ -479,7 +479,7 @@ class DeepfakeGuardSystem:
             self.security_monitor = None
 
         if self.use_audio:
-            self.mic = MicrophoneStream(sample_rate=16000, max_seconds=2.0)
+            self.mic = MicrophoneStream(sample_rate=16000, max_seconds=4.5)
 
         print("Source opened. Press ESC in the video window to quit.\n")
         prev_time = time.time()
@@ -538,7 +538,7 @@ class DeepfakeGuardSystem:
 
                 audio_result = None
                 if self.use_audio and self.mic is not None and self.frame_count % 30 == 0:
-                    full_chunk = self.mic.get_recent(self.mic.sample_rate)  # last 1s, real mic audio
+                    full_chunk = self.mic.get_recent(int(self.mic.sample_rate * 4.0))  # last 4s -- AASIST native window
                     audio_result = self.audio_detector.ensemble_score(full_chunk)
 
                 # ---- identity matching (ArcFace), every ~15th frame ----
