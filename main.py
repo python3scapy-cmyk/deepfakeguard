@@ -346,6 +346,9 @@ class DeepfakeGuardSystem:
                 "audio_rms_level": (
                     audio_result.get("rms_level") if audio_result else None
                 ),
+                "audio_rms_level": (
+                    audio_result.get("rms_level") if audio_result else None
+                ),
                 "lip_sync_score": sync_result.get("lip_sync_score"),
                 "anti_spoof_2d_raw": spoof_analysis.get("is_spoof", False),
                 "anti_spoof_2d_sustained": anti_spoof_2d_flag,
