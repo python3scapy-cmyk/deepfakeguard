@@ -70,7 +70,7 @@ def get_security_signal(camera_index=0, session_id="live_webrtc_call_xyz_123"):
 
 
     injection_risk_score = round(
-        (1.0 - timing_score_01) * 100
+        timing_score_01 * 100
     )
 
     frame_timing_anomaly_score = round(
