@@ -97,7 +97,7 @@ VISION_PAYLOAD_FIELDS = [
     "challenge_passed", "fail_reason", "metrics"
 ]
 
-VALID_CHALLENGE_TYPES = {"blink", "turn_left", "turn_right"}
+VALID_CHALLENGE_TYPES = {"blink_twice", "turn_left", "turn_right"}
 VALID_FAIL_REASONS = {"timeout", "wrong_direction", "spoof_detected", "multiple_faces_detected"}
 
 SCORE_FIELDS = {
@@ -546,7 +546,7 @@ def receive_fusion():
     # Vision / liveness: map from challenge_result if available
     challenge = payload.get("challenge_result")
     if challenge and isinstance(challenge, dict):
-        challenge_type = challenge.get("challenge_type", "blink")
+        challenge_type = challenge.get("challenge_type", "blink_twice")
         challenge_passed = challenge.get("challenge_passed", False)
         fail_reason = challenge.get("fail_reason")
         response_time_ms = challenge.get("response_time_ms", 0)
