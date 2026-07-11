@@ -187,13 +187,17 @@
   <!-- ===== End Consent Modal ===== -->
 
   <!--
-    Sender-only page. This device captures camera/mic and SENDS the
-    stream to the verifier (index.html) over WebRTC. It never displays
-    its own or the remote video — there is intentionally no <video> tag
-    rendering any stream back to this user. That keeps this page
-    strictly a media source, which matches the "participant is being
-    watched, not watching themselves" trust model.
+    This device captures camera/mic and SENDS the stream to the verifier
+    (index.html) over WebRTC. It also shows a local self-view preview
+    (mirrored) so the participant can see themselves while being
+    verified — this preview is purely local (srcObject = own stream),
+    it is NOT the remote/verifier's view and involves no extra network
+    traffic.
   -->
+  <video id="localPreview" autoplay playsinline muted style="
+    width: 100%; max-width: 480px; border-radius: 12px;
+    background: #000; margin-bottom: 16px; transform: scaleX(-1);
+  "></video>
   <div id="status"><span class="dot off" id="statusDot"></span><span id="statusText">Connecting…</span></div>
 
   <script>
@@ -215,6 +219,7 @@
 
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('localPreview').srcObject = localStream;
       } catch (err) {
         console.error('getUserMedia failed:', err);
         setStatus('Camera/mic permission denied or unavailable', false);
@@ -226,9 +231,10 @@
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
       // No ontrack handler — this page does not render any incoming
-      // stream. It only sends. (If the verifier side ever needs a
-      // two-way call, that behavior belongs in a different page, not
-      // here — this page's contract is sender-only.)
+      // remote stream. It only sends. (If the verifier side ever needs
+      // a two-way call, that behavior belongs in a different page, not
+      // here — this page's contract is sender-only for WebRTC, while
+      // the localPreview above is just a local mirror of its own camera.)
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
