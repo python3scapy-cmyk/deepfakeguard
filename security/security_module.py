@@ -5,40 +5,91 @@ from security.timing_check import get_timing_anomaly_score
 from datetime import datetime, timezone
 
 def get_security_signal(camera_index=0, session_id="live_webrtc_call_xyz_123"):
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     try:
         devices = list_cameras()
+
     except Exception as e:
         return {
             "module": "security",
             "session_id": session_id,
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "virtual_camera_detected": False,
+            "timestamp": timestamp,
+            "status": "unavailable",
+            "virtual_camera_detected": None,
             "device_name": f"ERROR: {str(e)}",
-            "injection_risk_score": 100,
-            "frame_timing_anomaly_score": 0,
-            "verdict": "REAL"
+            "injection_risk_score": None,
+            "frame_timing_anomaly_score": None,
+            "verdict": "UNKNOWN"
         }
+
+
     if not devices:
         return {
             "module": "security",
             "session_id": session_id,
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "virtual_camera_detected": False,
+            "timestamp": timestamp,
+            "status": "unavailable",
+            "virtual_camera_detected": None,
             "device_name": "NO_CAMERA_FOUND",
-            "injection_risk_score": 100,
-            "frame_timing_anomaly_score": 0,
-            "verdict": "REAL"
+            "injection_risk_score": None,
+            "frame_timing_anomaly_score": None,
+            "verdict": "UNKNOWN"
         }
+
+
+    # protect index
+    if camera_index >= len(devices):
+        camera_index = 0
+
+
     device_name = devices[camera_index]
+
+
     is_fake, matched = is_virtual_camera(device_name)
-    timing_score_01 = get_timing_anomaly_score(camera_index=camera_index)
-    injection_risk_score = round((1.0 - timing_score_01) * 100)
-    frame_timing_anomaly_score = round(timing_score_01 * 100)
-    verdict = "FAKE" if is_fake or timing_score_01 > 0.5 else "REAL"
+
+
+    timing_score_01 = get_timing_anomaly_score(
+        camera_index=camera_index
+    )
+
+
+    # timing check failed
+    if timing_score_01 is None:
+        return {
+            "module": "security",
+            "session_id": session_id,
+            "timestamp": timestamp,
+            "status": "unavailable",
+            "virtual_camera_detected": is_fake,
+            "device_name": device_name,
+            "injection_risk_score": None,
+            "frame_timing_anomaly_score": None,
+            "verdict": "UNKNOWN"
+        }
+
+
+    injection_risk_score = round(
+        (1.0 - timing_score_01) * 100
+    )
+
+    frame_timing_anomaly_score = round(
+        timing_score_01 * 100
+    )
+
+
+    verdict = (
+        "FAKE"
+        if is_fake or timing_score_01 > 0.5
+        else "REAL"
+    )
+
+
     return {
         "module": "security",
         "session_id": session_id,
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestamp": timestamp,
+        "status": "ok",
         "virtual_camera_detected": is_fake,
         "device_name": device_name,
         "injection_risk_score": injection_risk_score,
