@@ -447,6 +447,10 @@
                     <span id="reasonText">Awaiting signals &mdash; no modules have reported yet.</span>
                 </div>
                 <button class="cycle-btn" id="cycleBtn">Cycle test scenario &rarr; (showing simulated data)</button>
+		<div style="display:flex; gap:10px; margin-top:10px;">
+    			<button class="cycle-btn" id="attackBtn" style="background:#3a1420; border-color:#7a2a3a; color:#ff8080;">🚨 Simulate Deepfake Attack</button>
+    			<button class="cycle-btn" id="legitBtn" style="background:#14301c; border-color:#2a6a3a; color:#7dffa0;">✅ Simulate Legit User</button>
+		</div>
             </div>
             <div class="scores-grid">
                 <div class="score-panel panel-pending">
@@ -1358,6 +1362,96 @@ async function bootVerifier(){
     joinAsVerifier();
 }
 bootVerifier();
+
+// ── Attack / Legit deterministic demo simulators ───
+// Unlike the random cycleBtn payloads, these are FIXED so the live
+// demo is 100% predictable: attack always tanks the score hard,
+// legit always brings it back to a clean "Trusted" state.
+async function postScore(payload) {
+    await fetch('http://localhost:5000/score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+}
+
+async function simulateAttack() {
+    const sid = "attack_demo_" + Date.now();
+    const ts = Date.now();
+
+    await postScore({
+        module: "vision", session_id: sid, timestamp: ts,
+        payload: {
+            challenge_type: "blink_twice", prompt: "Please blink twice",
+            timeout_sec: 5.0, challenge_passed: false, fail_reason: "spoof_detected",
+            metrics: { response_time_ms: 4200, blink_count_detected: 0, avg_texture_score: 22, max_yaw_deviation: 3 }
+        }
+    });
+
+    await postScore({
+        module: "identity", session_id: sid, timestamp: new Date().toISOString(),
+        face_detected: true, multiple_faces_detected: true,
+        identity_score: 22, similarity_score: 0.22, threshold_used: 0.6,
+        confidence: "none", verdict: "FAKE"
+    });
+
+    await postScore({
+        module: "visual_deepfake", session_id: sid, timestamp: ts,
+        deepfake_probability: 0.94, confidence: "high", skipped: false
+    });
+
+    await postScore({
+        module: "audio", session_id: sid, timestamp: ts,
+        voice_detected: true, audio_deepfake_score: 18, verdict: "FAKE"
+    });
+
+    await postScore({
+        module: "security", session_id: sid, timestamp: ts,
+        virtual_camera_detected: true, injection_risk_score: 12,
+        frame_timing_anomaly_score: 15, verdict: "FAKE"
+    });
+}
+
+async function simulateLegit() {
+    const sid = "legit_demo_" + Date.now();
+    const ts = Date.now();
+
+    await postScore({
+        module: "vision", session_id: sid, timestamp: ts,
+        payload: {
+            challenge_type: "turn_left", prompt: "Turn your head left",
+            timeout_sec: 5.0, challenge_passed: true, fail_reason: null,
+            metrics: { response_time_ms: 900, blink_count_detected: 0, avg_texture_score: 92, max_yaw_deviation: 28 }
+        }
+    });
+
+    await postScore({
+        module: "identity", session_id: sid, timestamp: new Date().toISOString(),
+        face_detected: true, multiple_faces_detected: false,
+        identity_score: 95, similarity_score: 0.95, threshold_used: 0.6,
+        confidence: "high", verdict: "REAL"
+    });
+
+    await postScore({
+        module: "visual_deepfake", session_id: sid, timestamp: ts,
+        deepfake_probability: 0.03, confidence: "high", skipped: false
+    });
+
+    await postScore({
+        module: "audio", session_id: sid, timestamp: ts,
+        voice_detected: true, audio_deepfake_score: 93, verdict: "REAL"
+    });
+
+    await postScore({
+        module: "security", session_id: sid, timestamp: ts,
+        virtual_camera_detected: false, injection_risk_score: 90,
+        frame_timing_anomaly_score: 88, verdict: "REAL"
+    });
+}
+
+document.getElementById('attackBtn').addEventListener('click', simulateAttack);
+document.getElementById('legitBtn').addEventListener('click', simulateLegit);
+
 setInterval(fetchLiveScores, 1500);  // poll every 1.5 seconds
 fetchLiveScores();                   // also fire immediately on load
 </script>
