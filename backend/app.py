@@ -931,7 +931,7 @@ def get_scores():
                    band=band)
     _last_trust_band = band
 
-    if band == "awaiting":
+    if band == "awaiting" or all(v is None for v in latest_scores.values()):
         reason = "Session starting — waiting for verification modules to report."
     else:
         reason = build_reason(
