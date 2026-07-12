@@ -711,4 +711,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     system = DeepfakeGuardSystem()
     system.no_backend = args.no_backend
-    system.run()
+
+system.run()
