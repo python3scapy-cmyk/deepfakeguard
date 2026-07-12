@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepfakeGuard — Identity Capture</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<style>
+  :root{
+    /* Palette inherited from the verifier dashboard's dark theme so the two
+       pages read as one product. Nothing invented. */
+    --void:#04070f;
+    --hull:#0a0e1a;
+    --panel:#121a2c;
+    --panel-2:#161f34;
+    --line:#1e2d47;
+    --line-soft:#172239;
+    --ink:#e8edf8;
+    --ink-dim:#8fa0c0;
+    --ink-mute:#56678a;
+    --indigo:#6b8aff;
+    --indigo-dim:rgba(107,138,255,.12);
+    --mint:#22c97a;
+    --amber:#f6c842;
+    --rose:#ff5a5a;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --sans:'Inter',-apple-system,sans-serif;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0;}
+
+  body{
+    font-family:var(--sans);
+    background:var(--hull);
+    color:var(--ink);
+    min-height:100vh;
+    display:flex;flex-direction:column;align-items:center;
+    padding:24px 20px 40px;
+    /* faint instrument grid — ambient, not decorative noise */
+    background-image:
+      linear-gradient(rgba(107,138,255,.028) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(107,138,255,.028) 1px,transparent 1px);
+    background-size:44px 44px;
+  }
+
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;}
+  button:focus-visible,a:focus-visible{outline:2px solid var(--indigo);outline-offset:2px;}
+
+  /* ── top rail ───────────────────────────── */
+  .rail{
+    width:100%;max-width:560px;
+    display:flex;justify-content:space-between;align-items:center;
+    padding-bottom:14px;margin-bottom:18px;
+    border-bottom:1px solid var(--line-soft);
+  }
+  .brand{display:flex;align-items:center;gap:9px;}
+  .brand-mark{
+    width:9px;height:9px;border-radius:2px;background:var(--indigo);
+    box-shadow:0 0 10px var(--indigo);
+  }
+  .brand-name{
+    font-family:var(--mono);font-size:11px;font-weight:700;
+    letter-spacing:2.2px;text-transform:uppercase;color:var(--ink-dim);
+  }
+  .rail-session{
+    font-family:var(--mono);font-size:10px;font-weight:500;
+    letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-mute);
+  }
+
+  /* ── headline ───────────────────────────── */
+  .head{width:100%;max-width:560px;margin-bottom:18px;}
+  .head h1{
+    font-size:23px;font-weight:800;letter-spacing:-.5px;line-height:1.2;
+    margin-bottom:6px;
+  }
+  .head p{font-size:13.5px;line-height:1.55;color:var(--ink-dim);max-width:44ch;}
+
+  /* ── capture stage ──────────────────────── */
+  .stage{
+    width:100%;max-width:560px;position:relative;
+    border-radius:14px;overflow:hidden;
+    background:var(--void);
+    border:1px solid var(--line);
+    box-shadow:0 20px 60px rgba(0,0,0,.55);
+    min-height:300px;
+  }
+  /* video + canvas share one mirrored wrapper, so overlay geometry
+     lands on the face without any coordinate flipping */
+  .mirror{transform:scaleX(-1);display:block;position:relative;}
+  #localPreview{width:100%;display:block;background:var(--void);}
+  #hud{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+
+  /* DOM overlays sit OUTSIDE .mirror so text never reads backwards */
+  .chip{
+    position:absolute;z-index:3;
+    font-family:var(--mono);font-size:10px;font-weight:700;
+    letter-spacing:1.3px;text-transform:uppercase;
+    padding:5px 10px;border-radius:6px;
+    background:rgba(4,7,15,.72);backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.09);
+    display:flex;align-items:center;gap:7px;
+    transition:color .3s,border-color .3s;
+  }
+  .chip-state{top:14px;left:14px;color:var(--ink-dim);}
+  .chip-state .pip{
+    width:6px;height:6px;border-radius:50%;background:var(--ink-mute);
+    transition:background .3s,box-shadow .3s;
+  }
+  .chip-state[data-s="lock"]{color:var(--mint);border-color:rgba(34,201,122,.35);}
+  .chip-state[data-s="lock"] .pip{background:var(--mint);box-shadow:0 0 8px var(--mint);}
+  .chip-state[data-s="scan"]{color:var(--indigo);border-color:rgba(107,138,255,.35);}
+  .chip-state[data-s="scan"] .pip{background:var(--indigo);box-shadow:0 0 8px var(--indigo);animation:blip 1.1s infinite;}
+  .chip-state[data-s="done"]{color:var(--mint);border-color:rgba(34,201,122,.5);background:rgba(34,201,122,.1);}
+  .chip-state[data-s="done"] .pip{background:var(--mint);box-shadow:0 0 10px var(--mint);}
+  @keyframes blip{0%,100%{opacity:1;}50%{opacity:.25;}}
+
+  .chip-pct{
+    top:14px;right:14px;color:var(--ink);gap:2px;
+    font-variant-numeric:tabular-nums;
+  }
+  .chip-pct b{font-weight:700;}
+  .chip-pct span{color:var(--ink-mute);font-weight:500;}
+
+  .guide{
+    position:absolute;left:50%;bottom:16px;transform:translateX(-50%);
+    z-index:3;white-space:nowrap;
+    font-size:12.5px;font-weight:600;letter-spacing:.1px;
+    padding:8px 15px;border-radius:8px;
+    background:rgba(4,7,15,.78);backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.09);
+    color:var(--ink);
+    transition:opacity .25s,color .25s,border-color .25s;
+  }
+  .guide[data-tone="ok"]{color:var(--mint);border-color:rgba(34,201,122,.3);}
+  .guide[data-tone="warn"]{color:var(--amber);border-color:rgba(246,200,66,.3);}
+
+  /* ── telemetry strip ────────────────────── */
+  .telemetry{
+    width:100%;max-width:560px;margin-top:14px;
+    display:grid;grid-template-columns:repeat(4,1fr);
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;
+  }
+  .tel{padding:12px 8px 11px;text-align:center;border-right:1px solid var(--line-soft);}
+  .tel:last-child{border-right:none;}
+  .tel-k{
+    font-family:var(--mono);font-size:9px;font-weight:500;
+    letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-mute);
+    margin-bottom:7px;
+  }
+  .tel-v{
+    font-family:var(--mono);font-size:15px;font-weight:700;
+    font-variant-numeric:tabular-nums;color:var(--ink-dim);
+    line-height:1;margin-bottom:7px;transition:color .3s;
+  }
+  .tel-bar{height:3px;border-radius:2px;background:var(--line);overflow:hidden;}
+  .tel-fill{
+    height:100%;width:0%;border-radius:2px;background:var(--ink-mute);
+    transition:width .28s ease,background .3s;
+  }
+  .tel[data-t="good"] .tel-v{color:var(--mint);}
+  .tel[data-t="good"] .tel-fill{background:var(--mint);}
+  .tel[data-t="fair"] .tel-v{color:var(--amber);}
+  .tel[data-t="fair"] .tel-fill{background:var(--amber);}
+  .tel[data-t="poor"] .tel-v{color:var(--rose);}
+  .tel[data-t="poor"] .tel-fill{background:var(--rose);}
+
+  /* ── link status line (IDs preserved for the WebRTC code) ── */
+  #status{
+    width:100%;max-width:560px;margin-top:14px;
+    display:flex;align-items:center;gap:9px;
+    padding:11px 14px;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    font-family:var(--mono);font-size:11px;font-weight:500;
+    letter-spacing:.9px;text-transform:uppercase;color:var(--ink-dim);
+  }
+  .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  .dot.live{background:var(--mint);box-shadow:0 0 9px var(--mint);animation:pulse 2s infinite;}
+  .dot.off{background:var(--rose);box-shadow:0 0 9px rgba(255,90,90,.5);}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
+
+  .engine{
+    width:100%;max-width:560px;margin-top:10px;
+    font-family:var(--mono);font-size:9.5px;letter-spacing:1.1px;
+    text-transform:uppercase;color:var(--ink-mute);text-align:right;
+  }
+
+  @media (max-width:560px){
+    .head h1{font-size:20px;}
+    .telemetry{grid-template-columns:repeat(2,1fr);}
+    .tel:nth-child(2){border-right:none;}
+    .tel:nth-child(1),.tel:nth-child(2){border-bottom:1px solid var(--line-soft);}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important;}
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══ Consent modal — same contract, restyled to match ═══ -->
+<div id="consentOverlay" role="dialog" aria-modal="true" aria-labelledby="consentTitle" style="
+  position:fixed;inset:0;z-index:9999;background:rgba(4,7,15,.97);
+  display:flex;align-items:center;justify-content:center;padding:24px;
+  backdrop-filter:blur(6px);">
+  <div id="consentBox" style="
+    max-width:560px;width:100%;background:var(--panel);
+    border:1px solid var(--line);border-radius:14px;padding:30px;
+    box-shadow:0 24px 70px rgba(0,0,0,.6);">
+
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:18px;">
+      <span style="width:9px;height:9px;border-radius:2px;background:var(--indigo);box-shadow:0 0 10px var(--indigo);"></span>
+      <span style="font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:2.2px;text-transform:uppercase;color:var(--ink-mute);">Consent Required</span>
+    </div>
+
+    <h2 id="consentTitle" style="margin:0 0 18px;font-size:21px;font-weight:800;letter-spacing:-.4px;">Identity verification</h2>
+
+    <div id="consentStateInitial">
+      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);margin-bottom:12px;"><strong style="color:var(--ink);">What we collect:</strong><br>
+      &bull; A mathematical face embedding (not a photo)<br>
+      &bull; A voice embedding (not a recording)<br>
+      &bull; Video stream metadata for liveness verification</p>
+
+      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);margin-bottom:12px;"><strong style="color:var(--ink);">Why:</strong> To verify your identity and detect deepfake impersonation in real time.</p>
+
+      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);margin-bottom:12px;"><strong style="color:var(--ink);">How long we keep it:</strong> Your one-time enrollment face embedding is saved to disk so you don't have to re-enroll every session. Everything else — live video/audio embeddings and session metadata — is session-only and discarded when the session ends. Nothing else is written to disk or sent to a server.</p>
+
+      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);"><strong style="color:var(--ink);">Your rights:</strong><br>
+      &bull; You may withdraw consent at any time by ending the session.<br>
+      &bull; You may request deletion of any in-session data (deleted automatically when the session ends).<br>
+      &bull; You may also request deletion of your persisted enrollment embedding at any time — this requires a manual step, since it's designed to persist across sessions.</p>
+
+      <div style="background:var(--indigo-dim);border-left:2px solid var(--indigo);padding:13px 14px;margin:18px 0;font-size:12.5px;line-height:1.6;color:var(--ink-dim);border-radius:0 8px 8px 0;">
+        <strong style="color:var(--ink);">BIOMETRIC DATA NOTICE:</strong> We are collecting biometric identifiers (a persisted enrollment face embedding, plus in-session face and voice embeddings) to verify your identity and detect deepfake impersonation. The enrollment embedding is kept on disk until you delete it or re-enroll. All other session data is retained only for the duration of this session and deleted when it ends. You may withdraw consent at any time by ending the session, and may request deletion of your stored enrollment embedding at any time.
+      </div>
+
+      <p style="font-size:11.5px;color:var(--ink-mute);">
+        <a href="./privacy-notice.html" target="_blank" rel="noopener" style="color:var(--indigo);">Full Privacy Notice</a> &middot; Your Rights
+      </p>
+
+      <div style="display:flex;gap:10px;margin-top:22px;">
+        <button id="consentBtn" style="
+          flex:1;padding:13px 16px;border:none;border-radius:9px;
+          background:var(--indigo);color:#08111f;font-family:var(--sans);
+          font-size:13.5px;font-weight:700;cursor:pointer;">Start verification</button>
+        <button id="declineBtn" style="
+          padding:13px 18px;border:1px solid var(--line);border-radius:9px;
+          background:transparent;color:var(--ink-dim);font-family:var(--sans);
+          font-size:13.5px;font-weight:600;cursor:pointer;">Decline</button>
+      </div>
+    </div>
+
+    <div id="consentStateInitializing" style="display:none;text-align:center;padding:22px 0;">
+      <div style="width:28px;height:28px;border:2px solid var(--line);border-top-color:var(--indigo);border-radius:50%;margin:0 auto 16px;animation:consentSpin .8s linear infinite;"></div>
+      <p id="consentInitializingText" style="font-family:var(--mono);font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-dim);">Initializing camera</p>
+    </div>
+
+    <div id="consentStateError" style="display:none;">
+      <p style="font-size:13.5px;line-height:1.6;color:var(--rose);">Camera access is blocked. Enable camera and microphone permissions for this site, then try again.</p>
+      <button id="consentRetryBtn" style="
+        margin-top:16px;padding:13px 18px;border:none;border-radius:9px;
+        background:var(--indigo);color:#08111f;font-family:var(--sans);
+        font-size:13.5px;font-weight:700;cursor:pointer;">Try again</button>
+    </div>
+
+    <div id="consentStateDecline" style="display:none;">
+      <p style="font-size:15px;font-weight:700;margin-bottom:8px;">Verification is required to continue.</p>
+      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);">
+        This session needs camera and microphone access to confirm your identity and detect deepfake attempts in real time.
+      </p>
+      <button id="consentBackBtn" style="
+        margin-top:18px;padding:13px 18px;border:1px solid var(--line);border-radius:9px;
+        background:transparent;color:var(--ink);font-family:var(--sans);
+        font-size:13.5px;font-weight:600;cursor:pointer;">Back</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  @keyframes consentSpin{to{transform:rotate(360deg);}}
+  body.consent-pending{overflow:hidden;}
+</style>
+
+<script>
+/* Consent logic — behaviour unchanged from the original file. */
+(function(){
+  window.consentGranted = false;
+
+  var overlay   = document.getElementById('consentOverlay');
+  var stInitial = document.getElementById('consentStateInitial');
+  var stInit    = document.getElementById('consentStateInitializing');
+  var stError   = document.getElementById('consentStateError');
+  var stDecline = document.getElementById('consentStateDecline');
+  var consentBtn= document.getElementById('consentBtn');
+  var declineBtn= document.getElementById('declineBtn');
+  var backBtn   = document.getElementById('consentBackBtn');
+  var retryBtn  = document.getElementById('consentRetryBtn');
+
+  var resolveConsent = null;
+  var focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  function showState(el){
+    [stInitial, stInit, stError, stDecline].forEach(function(s){ s.style.display = 'none'; });
+    el.style.display = 'block';
+  }
+
+  function trapFocus(e){
+    if (overlay.style.display === 'none') return;
+    if (e.key !== 'Tab') return;
+    var f = overlay.querySelectorAll(focusableSelector);
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+  }
+  document.addEventListener('keydown', trapFocus);
+
+  function closeOverlay(){
+    overlay.style.display = 'none';
+    document.body.classList.remove('consent-pending');
+  }
+
+  window.requestConsent = function(){
+    return new Promise(function(resolve){
+      resolveConsent = resolve;
+      overlay.style.display = 'flex';
+      document.body.classList.add('consent-pending');
+      showState(stInitial);
+      consentBtn.focus();
+    });
+  };
+
+  consentBtn.addEventListener('click', async function(){
+    consentBtn.disabled = true;
+    declineBtn.disabled = true;
+    showState(stInit);
+    await new Promise(function(r){ requestAnimationFrame(function(){ requestAnimationFrame(r); }); });
+    window.consentGranted = true;
+    closeOverlay();
+    if (resolveConsent) resolveConsent(true);
+  });
+
+  declineBtn.addEventListener('click', function(){ showState(stDecline); backBtn.focus(); });
+
+  backBtn.addEventListener('click', function(){
+    consentBtn.disabled = false;
+    declineBtn.disabled = false;
+    showState(stInitial);
+    consentBtn.focus();
+  });
+
+  window.showConsentError = function(){
+    overlay.style.display = 'flex';
+    document.body.classList.add('consent-pending');
+    showState(stError);
+    retryBtn.focus();
+  };
+
+  retryBtn.addEventListener('click', function(){
+    closeOverlay();
+    if (window.onConsentRetry) window.onConsentRetry();
+  });
+})();
+</script>
+<!-- ═══ End consent modal ═══ -->
+
+
+<div class="rail">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <span class="brand-name">DeepfakeGuard</span>
+  </div>
+  <span class="rail-session" id="railSession">Room · demo-room</span>
+</div>
+
+<div class="head">
+  <h1>Hold still while we capture your face</h1>
+  <p>Look straight at the camera. We check framing, lighting and sharpness before sending anything to the verifier.</p>
+</div>
+
+<!--
+  This device captures camera/mic and SENDS the stream to the verifier
+  (index.html) over WebRTC. The preview below is a purely local mirror of
+  the participant's own camera (srcObject = own stream) — it is NOT the
+  verifier's view and adds no network traffic. The HUD canvas drawn on top
+  runs entirely in this browser and sends nothing anywhere.
+-->
+<div class="stage" id="stage">
+  <div class="mirror">
+    <video id="localPreview" autoplay playsinline muted></video>
+    <canvas id="hud"></canvas>
+  </div>
+
+  <div class="chip chip-state" id="chipState" data-s="idle">
+    <span class="pip"></span><span id="chipStateText">Searching</span>
+  </div>
+  <div class="chip chip-pct" id="chipPct">
+    <b id="pctVal">0</b><span>% captured</span>
+  </div>
+  <div class="guide" id="guide" data-tone="warn">Position your face in the frame</div>
+</div>
+
+<div class="telemetry" id="telemetry">
+  <div class="tel" id="telFraming" data-t="">
+    <div class="tel-k">Framing</div>
+    <div class="tel-v" id="vFraming">—</div>
+    <div class="tel-bar"><div class="tel-fill" id="fFraming"></div></div>
+  </div>
+  <div class="tel" id="telLight" data-t="">
+    <div class="tel-k">Light</div>
+    <div class="tel-v" id="vLight">—</div>
+    <div class="tel-bar"><div class="tel-fill" id="fLight"></div></div>
+  </div>
+  <div class="tel" id="telSharp" data-t="">
+    <div class="tel-k">Sharpness</div>
+    <div class="tel-v" id="vSharp">—</div>
+    <div class="tel-bar"><div class="tel-fill" id="fSharp"></div></div>
+  </div>
+  <div class="tel" id="telStable" data-t="">
+    <div class="tel-k">Stability</div>
+    <div class="tel-v" id="vStable">—</div>
+    <div class="tel-bar"><div class="tel-fill" id="fStable"></div></div>
+  </div>
+</div>
+
+<div id="status">
+  <span class="dot off" id="statusDot"></span><span id="statusText">Connecting…</span>
+</div>
+
+<div class="engine" id="engineLabel">Detector · heuristic</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     Capture HUD engine.
+
+     Runs 100% locally in this browser. It does NOT talk to the backend
+     and does NOT change the WebRTC contract below. It reads pixels from
+     the same <video> element that is already on screen and derives four
+     honest quality signals from them.
+
+     Two detection tiers:
+       1. MediaPipe FaceLandmarker (loaded from CDN, async) — real
+          468-point mesh, real face box.
+       2. Skin-chroma fallback (pure JS, no network) — if the CDN or the
+          model is unavailable, we still find the face region and every
+          quality metric keeps working.
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function(){
+  const video  = document.getElementById('localPreview');
+  const hud    = document.getElementById('hud');
+  const ctx    = hud.getContext('2d');
+
+  const chipState = document.getElementById('chipState');
+  const chipText  = document.getElementById('chipStateText');
+  const pctVal    = document.getElementById('pctVal');
+  const guide     = document.getElementById('guide');
+  const engineLbl = document.getElementById('engineLabel');
+
+  // Offscreen buffer — all pixel maths happens at this small size, so the
+  // whole HUD costs well under a millisecond per frame.
+  const SW = 128, SH = 96;
+  const work = document.createElement('canvas');
+  work.width = SW; work.height = SH;
+  const wctx = work.getContext('2d', { willReadFrequently: true });
+
+  let prevGray = null;
+  let landmarker = null;          // set if MediaPipe loads
+  let mode = 'heuristic';
+
+  // Smoothed state
+  let box = null;                 // {x,y,w,h} in normalised 0..1 coords
+  let smBox = null;
+  let landmarks = null;
+  let capture = 0;                // 0..100
+  let sweep = 0;
+  let fpsT = performance.now(), fpsN = 0, fps = 0;
+  let lastVideoTime = -1;
+  let lastScore = { framing:0, light:0, sharp:0, stable:0, hint:null };
+
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const lerp  = (a,b,t)=>a+(b-a)*t;
+  const ema   = (prev,next,a)=> prev===null?next:prev*(1-a)+next*a;
+
+  /* ── metric smoothing ─────────────────────────────────────── */
+  let mLight=null, mSharp=null, mMotion=null;
+
+  /* ── MediaPipe (progressive enhancement) ──────────────────── */
+  window.__onLandmarkerReady = function(lm){
+    landmarker = lm;
+    mode = 'mesh';
+    engineLbl.textContent = 'Detector · face mesh (468 pts)';
+  };
+
+  /* ── skin-chroma fallback detector ────────────────────────── */
+  function detectHeuristic(data){
+    // YCbCr skin gate. Crude but genuinely responsive to a real face.
+    const cols = new Float32Array(SW), rows = new Float32Array(SH);
+    let total = 0;
+    for (let y=0; y<SH; y++){
+      for (let x=0; x<SW; x++){
+        const i = (y*SW + x) * 4;
+        const r = data[i], g = data[i+1], b = data[i+2];
+        const Y  =  0.299*r + 0.587*g + 0.114*b;
+        const Cb = -0.169*r - 0.331*g + 0.500*b + 128;
+        const Cr =  0.500*r - 0.419*g - 0.081*b + 128;
+        if (Y > 45 && Cb >= 77 && Cb <= 130 && Cr >= 133 && Cr <= 175){
+          cols[x]++; rows[y]++; total++;
+        }
+      }
+    }
+    if (total < SW*SH*0.012) return null;   // not enough skin — no face
+
+    // Trim the outer 10% of skin mass from each axis so stray hands/necks
+    // don't blow the box out.
+    function span(hist, n, mass){
+      const trim = mass * 0.10;   // ignore the outer 10% of skin mass per axis
+      let acc = 0, a = 0, b = n - 1;
+      for (let i = 0; i < n; i++){ acc += hist[i]; if (acc >= trim){ a = i; break; } }
+      acc = 0;
+      for (let i = n - 1; i >= 0; i--){ acc += hist[i]; if (acc >= trim){ b = i; break; } }
+      return a < b ? [a, b] : [0, n - 1];
+    }
+    const [x0,x1] = span(cols, SW, total);
+    const [y0,y1] = span(rows, SH, total);
+    let w = (x1-x0)/SW, h = (y1-y0)/SH;
+    if (w <= 0.02 || h <= 0.02) return null;
+
+    // Faces are taller than wide — nudge the raw blob toward that ratio.
+    const cx = (x0/SW + w/2), cy = (y0/SH + h/2);
+    h = Math.max(h, w*1.15);
+    return { x: cx - w/2, y: cy - h/2, w, h };
+  }
+
+  /* ── per-frame pixel metrics ──────────────────────────────── */
+  // Metrics are measured INSIDE the face box when we have one. A dark room
+  // behind a well-lit face shouldn't fail the lighting check, and a blurry
+  // background shouldn't fail the sharpness check — only the face matters.
+  function region(){
+    if (!smBox) return { x0:1, y0:1, x1:SW-2, y1:SH-2 };
+    return {
+      x0: clamp(Math.round(smBox.x*SW), 1, SW-3),
+      y0: clamp(Math.round(smBox.y*SH), 1, SH-3),
+      x1: clamp(Math.round((smBox.x+smBox.w)*SW), 2, SW-2),
+      y1: clamp(Math.round((smBox.y+smBox.h)*SH), 2, SH-2)
+    };
+  }
+
+  function measure(){
+    wctx.drawImage(video, 0, 0, SW, SH);
+    const data = wctx.getImageData(0, 0, SW, SH).data;
+
+    const gray = new Float32Array(SW*SH);
+    for (let p=0, i=0; p<SW*SH; p++, i+=4){
+      gray[p] = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+    }
+
+    const r = region();
+    let lumaSum = 0, lumaN = 0, lap = 0, lapN = 0, diff = 0;
+
+    for (let y=r.y0; y<=r.y1; y++){
+      for (let x=r.x0; x<=r.x1; x++){
+        const p = y*SW + x;
+        lumaSum += gray[p]; lumaN++;
+        // Sharpness: mean |Laplacian|. Blur, or a face re-shot off a screen,
+        // collapses this value.
+        lap += Math.abs(4*gray[p] - gray[p-1] - gray[p+1] - gray[p-SW] - gray[p+SW]);
+        lapN++;
+        if (prevGray) { diff += Math.abs(gray[p] - prevGray[p]); }
+      }
+    }
+
+    const meanLuma = lumaN ? lumaSum / lumaN : 0;
+    const sharp    = lapN  ? lap / lapN      : 0;
+    const motion   = (prevGray && lapN) ? diff / lapN : null;
+
+    prevGray = gray;
+
+    mLight = ema(mLight, meanLuma, 0.18);
+    mSharp = ema(mSharp, sharp,    0.18);
+    if (motion !== null) mMotion = ema(mMotion, motion, 0.22);
+
+    return data;
+  }
+
+  /* ── scoring ──────────────────────────────────────────────── */
+  function scoreAll(){
+    // Framing: face height should fill 32–66% of the frame, roughly centred.
+    let framing = 0, hint = null;
+    if (smBox){
+      const h  = smBox.h;
+      const cx = smBox.x + smBox.w/2;
+      const cy = smBox.y + smBox.h/2;
+      const offset = Math.hypot(cx-0.5, cy-0.5);
+
+      let size;
+      if (h < 0.32){ size = clamp(h/0.32, 0, 1); hint = 'Move a little closer'; }
+      else if (h > 0.66){ size = clamp((1-h)/0.34, 0, 1); hint = 'Move back slightly'; }
+      else size = 1;
+
+      const centred = clamp(1 - offset/0.28, 0, 1);
+      if (!hint && offset > 0.16) hint = 'Centre your face';
+      framing = clamp(size*0.65 + centred*0.35, 0, 1);
+    } else {
+      hint = 'Position your face in the frame';
+    }
+
+    // Light: target mean luma 80–185.
+    let light;
+    if (mLight === null) light = 0;
+    else if (mLight < 80)  { light = clamp(mLight/80, 0, 1); if(!hint) hint = 'Find brighter light'; }
+    else if (mLight > 185) { light = clamp((255-mLight)/70, 0, 1); if(!hint) hint = 'Too much glare'; }
+    else light = 1;
+
+    // Sharpness: below ~6 is a soft / blurred / re-screened image.
+    const sharp = mSharp === null ? 0 : clamp((mSharp - 2.5) / 9, 0, 1);
+    if (sharp < 0.45 && !hint) hint = 'Image is blurry — clean the lens';
+
+    // Stability: some motion is expected (a live person breathes). Too much
+    // motion blurs the capture; literally zero motion means a static image.
+    let stable;
+    if (mMotion === null) stable = 0;
+    else if (mMotion < 0.35) { stable = 0.35; if(!hint) hint = 'No motion detected'; }
+    else if (mMotion > 7.5)  { stable = clamp(1 - (mMotion-7.5)/9, 0, 1); if(!hint) hint = 'Hold still'; }
+    else stable = 1;
+
+    return { framing, light, sharp, stable, hint };
+  }
+
+  /* ── telemetry paint ──────────────────────────────────────── */
+  const tel = {
+    framing:['telFraming','vFraming','fFraming'],
+    light:  ['telLight','vLight','fLight'],
+    sharp:  ['telSharp','vSharp','fSharp'],
+    stable: ['telStable','vStable','fStable']
+  };
+  function tier(v){ return v >= 0.75 ? 'good' : v >= 0.45 ? 'fair' : 'poor'; }
+  function paintTel(k, v, has){
+    const [wrapId, valId, fillId] = tel[k];
+    const pct = Math.round(v*100);
+    document.getElementById(wrapId).dataset.t = has ? tier(v) : '';
+    document.getElementById(valId).textContent = has ? pct + '%' : '—';
+    document.getElementById(fillId).style.width = (has ? pct : 0) + '%';
+  }
+
+  /* ── HUD drawing (geometry only — text lives in DOM, unmirrored) ── */
+  function bracket(x, y, w, h, len, col, lw){
+    ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.lineCap = 'round';
+    const c = [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]];
+    for (const [px,py,sx,sy] of c){
+      ctx.beginPath();
+      ctx.moveTo(px + sx*len, py);
+      ctx.lineTo(px, py);
+      ctx.lineTo(px, py + sy*len);
+      ctx.stroke();
+    }
+  }
+
+  function draw(s){
+    const W = hud.width, H = hud.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const good = s.framing > .7 && s.light > .7 && s.sharp > .5 && s.stable > .7;
+    const col  = capture >= 100 ? '#22c97a' : good ? '#22c97a' : smBox ? '#6b8aff' : 'rgba(107,138,255,.30)';
+
+    // Guide outline when nothing is locked yet
+    if (!smBox){
+      const gw = W*0.42, gh = H*0.62;
+      const gx = (W-gw)/2, gy = (H-gh)/2;
+      ctx.setLineDash([5, 7]);
+      bracket(gx, gy, gw, gh, 26, 'rgba(107,138,255,.30)', 2);
+      ctx.setLineDash([]);
+      return;
+    }
+
+    const bx = smBox.x*W, by = smBox.y*H, bw = smBox.w*W, bh = smBox.h*H;
+
+    // Soft vignette outside the face box — pulls the eye to the subject
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,7,15,.34)';
+    ctx.beginPath();
+    ctx.rect(0, 0, W, H);
+    ctx.roundRect(bx-8, by-8, bw+16, bh+16, 16);
+    ctx.fill('evenodd');
+    ctx.restore();
+
+    // Landmark mesh (real points when MediaPipe is live)
+    if (landmarks && landmarks.length){
+      ctx.fillStyle = 'rgba(107,138,255,.55)';
+      for (let i=0; i<landmarks.length; i+=3){
+        const p = landmarks[i];
+        ctx.fillRect(p.x*W - 0.8, p.y*H - 0.8, 1.6, 1.6);
+      }
+    }
+
+    // Scan sweep — only while still capturing
+    if (capture < 100){
+      const sy = by + (bh * sweep);
+      const g = ctx.createLinearGradient(0, sy-22, 0, sy+22);
+      g.addColorStop(0,   'rgba(107,138,255,0)');
+      g.addColorStop(0.5, 'rgba(107,138,255,.30)');
+      g.addColorStop(1,   'rgba(107,138,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(bx, sy-22, bw, 44);
+      ctx.strokeStyle = 'rgba(150,175,255,.85)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(bx, sy); ctx.lineTo(bx+bw, sy); ctx.stroke();
+    }
+
+    // Corner brackets — the lock
+    bracket(bx, by, bw, bh, Math.min(bw, bh)*0.22, col, 2.5);
+
+    // Capture progress traced around the face box perimeter
+    if (capture > 0){
+      const per = 2*(bw+bh);
+      ctx.save();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([per*(capture/100), per]);
+      ctx.lineDashOffset = 0;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, 10);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /* ── main loop ────────────────────────────────────────────── */
+  function resize(){
+    const r = video.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    hud.width  = Math.round(r.width  * dpr);
+    hud.height = Math.round(r.height * dpr);
+    hud.style.width  = r.width + 'px';
+    hud.style.height = r.height + 'px';
+  }
+  window.addEventListener('resize', resize);
+
+  let last = performance.now();
+  function loop(now){
+    requestAnimationFrame(loop);
+    if (video.readyState < 2 || !video.videoWidth) return;
+    if (hud.width === 0) resize();
+
+    const dt = Math.min((now - last) / 1000, 0.1);
+    last = now;
+
+    // The camera runs at ~30fps while this loop runs at ~60Hz, so half the
+    // ticks would re-read an identical frame — which reads as "zero motion"
+    // and would wrongly trip the static-image check. Only measure when the
+    // video has actually advanced; keep animating the HUD regardless.
+    if (video.currentTime === lastVideoTime){
+      sweep = (sweep + dt*0.55) % 1;
+      draw(lastScore);
+      return;
+    }
+    lastVideoTime = video.currentTime;
+
+    // fps
+    fpsN++;
+    if (now - fpsT > 500){ fps = Math.round(fpsN * 1000 / (now - fpsT)); fpsN = 0; fpsT = now; }
+
+    const data = measure();
+
+    // Detection
+    if (mode === 'mesh' && landmarker){
+      try {
+        const res = landmarker.detectForVideo(video, now);
+        if (res && res.faceLandmarks && res.faceLandmarks.length){
+          landmarks = res.faceLandmarks[0];
+          let minX=1, minY=1, maxX=0, maxY=0;
+          for (const p of landmarks){
+            if (p.x<minX) minX=p.x; if (p.x>maxX) maxX=p.x;
+            if (p.y<minY) minY=p.y; if (p.y>maxY) maxY=p.y;
+          }
+          box = { x:minX, y:minY, w:maxX-minX, h:maxY-minY };
+        } else { box = null; landmarks = null; }
+      } catch(e){ box = detectHeuristic(data); landmarks = null; }
+    } else {
+      box = detectHeuristic(data);
+      landmarks = null;
+    }
+
+    // Smooth the box so brackets glide instead of jittering
+    if (box){
+      smBox = smBox ? {
+        x: lerp(smBox.x, box.x, 0.25),
+        y: lerp(smBox.y, box.y, 0.25),
+        w: lerp(smBox.w, box.w, 0.25),
+        h: lerp(smBox.h, box.h, 0.25)
+      } : box;
+    } else {
+      smBox = null;
+      landmarks = null;
+    }
+
+    const s = scoreAll();
+    lastScore = s;
+    const has = !!smBox;
+
+    paintTel('framing', s.framing, has);
+    paintTel('light',   s.light,   mLight !== null);
+    paintTel('sharp',   s.sharp,   mSharp !== null);
+    paintTel('stable',  s.stable,  mMotion !== null);
+
+    // Capture accumulates only while every signal is acceptable, and bleeds
+    // away when it isn't — so you cannot bank progress from one lucky frame.
+    const allGood = has && s.framing > .7 && s.light > .7 && s.sharp > .5 && s.stable > .7;
+    capture = clamp(capture + (allGood ? dt*42 : -dt*70), 0, 100);
+    pctVal.textContent = Math.round(capture);
+
+    sweep = (sweep + dt*0.55) % 1;
+
+    // State + guidance copy
+    if (capture >= 100){
+      chipState.dataset.s = 'done';
+      chipText.textContent = 'Captured';
+      guide.textContent = 'Face captured — awaiting verifier';
+      guide.dataset.tone = 'ok';
+    } else if (allGood){
+      chipState.dataset.s = 'scan';
+      chipText.textContent = 'Scanning';
+      guide.textContent = 'Hold still — capturing';
+      guide.dataset.tone = 'ok';
+    } else if (has){
+      chipState.dataset.s = 'lock';
+      chipText.textContent = 'Face found';
+      guide.textContent = s.hint || 'Adjust your position';
+      guide.dataset.tone = 'warn';
+    } else {
+      chipState.dataset.s = 'idle';
+      chipText.textContent = 'Searching';
+      guide.textContent = 'Position your face in the frame';
+      guide.dataset.tone = 'warn';
+    }
+
+    // ── HOOK ──────────────────────────────────────────────────
+    // When the backend later emits a verdict, this is where the redirect
+    // goes. Capture reaching 100 is a *local quality* gate, not a verdict —
+    // it deliberately does NOT redirect on its own.
+    //
+    //   socket.on('verification-result', d => {
+    //     if (d.status === 'passed') window.location.href = 'verified.html';
+    //   });
+    // ──────────────────────────────────────────────────────────
+
+    draw(s);
+  }
+
+  video.addEventListener('loadedmetadata', resize);
+  requestAnimationFrame(loop);
+})();
+</script>
+
+<!-- MediaPipe upgrade. If this fails (offline, CDN blocked, old browser)
+     nothing breaks — the heuristic detector above stays in charge. -->
+<script type="module">
+  try {
+    const { FaceLandmarker, FilesetResolver } =
+      await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14');
+    const files = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+    );
+    const lm = await FaceLandmarker.createFromOptions(files, {
+      baseOptions: {
+        modelAssetPath:
+          'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+        delegate: 'GPU'
+      },
+      runningMode: 'VIDEO',
+      numFaces: 1
+    });
+    window.__onLandmarkerReady(lm);
+  } catch (e) {
+    console.info('[hud] face mesh unavailable, using heuristic detector:', e.message);
+  }
+</script>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     WebRTC — unchanged. Sender-only contract preserved exactly.
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+  const ROOM = "demo-room";
+  const socket = io(window.location.hostname === 'localhost'
+    ? 'http://localhost:5000'
+    : `http://${window.location.hostname}:5000`);
+  const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  let pc, localStream;
+
+  document.getElementById('railSession').textContent = 'Room · ' + ROOM;
+
+  function setStatus(text, live) {
+    document.getElementById('statusText').textContent = text;
+    document.getElementById('statusDot').className = 'dot ' + (live ? 'live' : 'off');
+  }
+
+  async function start() {
+    await window.requestConsent();
+    window.onConsentRetry = start;
+
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localPreview').srcObject = localStream;
+    } catch (err) {
+      console.error('getUserMedia failed:', err);
+      setStatus('Camera or microphone unavailable', false);
+      window.showConsentError();
+      return;
+    }
+
+    pc = new RTCPeerConnection(config);
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+    // No ontrack handler — this page does not render any incoming remote
+    // stream. It only sends. (If the verifier side ever needs a two-way
+    // call, that belongs in a different page, not here — this page's
+    // contract is sender-only for WebRTC, while the preview above is just
+    // a local mirror of its own camera.)
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('ice-candidate', { room: ROOM, candidate: event.candidate });
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') setStatus('Streaming to verifier', true);
+      else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) setStatus('Disconnected', false);
+    };
+
+    socket.emit('join', { room: ROOM, role: 'participant' });
+    setStatus('Waiting for verifier to join', false);
+  }
+
+  socket.on('peer-joined', () => {
+    // participant.html never initiates the offer — it waits for the
+    // verifier (index.html) to send one. This removes the race where both
+    // sides tried to create an offer depending on who joined first.
+    setStatus('Verifier joined — awaiting offer', false);
+  });
+
+  socket.on('offer', async (data) => {
+    await pc.setRemoteDescription(data.sdp);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('answer', { room: ROOM, sdp: answer });
+  });
+
+  socket.on('answer', async (data) => {
+    await pc.setRemoteDescription(data.sdp);
+  });
+
+  socket.on('ice-candidate', async (data) => {
+    try {
+      await pc.addIceCandidate(data.candidate);
+    } catch (err) {
+      console.error("ICE candidate error:", err);
+    }
+  });
+
+  start();
+</script>
+</body>
+</html>

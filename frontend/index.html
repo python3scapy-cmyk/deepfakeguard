@@ -128,6 +128,7 @@
         .score-panel.panel-good::before{background:linear-gradient(90deg,var(--success),#4ade80);}
         .score-panel.panel-warn::before{background:linear-gradient(90deg,var(--warning),#fbbf24);}
         .score-panel.panel-bad::before{background:linear-gradient(90deg,var(--danger),#f87171);}
+        .score-panel.panel-pending::before{background:linear-gradient(90deg,#5a6484,#7c88ab);}
         .score-panel:hover{box-shadow:var(--shadow-hover);transform:translateY(-2px);border-color:var(--border);}
         .score-panel-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
         .score-panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);}
@@ -135,6 +136,7 @@
         .chip-good{background:var(--success-bg);color:var(--success);}
         .chip-warn{background:var(--warning-bg);color:var(--warning);}
         .chip-bad{background:var(--danger-bg);color:var(--danger);}
+        .chip-pending{background:rgba(124,136,171,0.15);color:#7c88ab;}
         .score-panel-value{font-size:36px;font-weight:800;line-height:1;letter-spacing:-1px;margin-bottom:10px;}
         .val-good{color:var(--success);}.val-warn{color:var(--warning);}.val-bad{color:var(--danger);}
         .score-bar{height:5px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;}
@@ -151,9 +153,204 @@
         .score-panel:nth-child(1){animation-delay:.06s;}.score-panel:nth-child(2){animation-delay:.12s;}.score-panel:nth-child(3){animation-delay:.18s;}.score-panel:nth-child(4){animation-delay:.24s;}.score-panel:nth-child(5){animation-delay:.30s;}
         ::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
         @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;}}
+        /* ── Week 3 Member 4 additions ─────────────────────── */
+        .conflict-alert{display:none;margin-bottom:16px;padding:14px 18px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);border-radius:var(--radius-sm);color:var(--danger);font-size:13px;font-weight:600;animation:slideUp .4s ease .1s backwards;}
+        .conflict-alert.visible{display:flex;align-items:center;gap:10px;}
+        .conflict-alert .conflict-icon{font-size:18px;}
+        .trust-score-band.prominent{padding:28px;}
+        .trust-score-band.prominent .score-ring-container{width:120px;height:120px;}
+        .trust-score-band.prominent .score-ring-container svg{width:120px;height:120px;}
+        .trust-score-band.prominent .ring-label{font-size:28px;}
+        .trust-score-band.prominent .trust-status{font-size:13px;padding:7px 18px;}
+        .trust-score-band.prominent .reason-area{font-size:13px;padding:16px 18px;}
+        .waveform-canvas{width:100%;height:40px;margin-top:8px;border-radius:4px;background:var(--bg-tertiary);}
+        .panel-badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:uppercase;margin-left:6px;vertical-align:middle;}
+        .badge-high{background:var(--success-bg);color:var(--success);}
+        .badge-low{background:var(--warning-bg);color:var(--warning);}
+        .no-face-placeholder{color:var(--text-muted);font-size:12px;font-style:italic;padding:6px 0;}
+        .cascade-tooltip{cursor:help;border-bottom:1px dashed var(--text-muted);}
     </style>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
+<!-- ===== Consent Acknowledgment Modal (Day 2) ===== -->
+<div id="consentOverlay" role="dialog" aria-modal="true" aria-labelledby="consentTitle" style="
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(6, 8, 14, 0.97);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; box-sizing: border-box;
+  font-family: sans-serif;
+">
+  <div id="consentBox" style="
+    max-width: 560px; width: 100%;
+    background: #12172a; border: 1px solid #232b45; border-radius: 12px;
+    padding: 32px; color: #e8edf8; box-sizing: border-box;
+  ">
+    <h2 id="consentTitle" style="margin: 0 0 16px; font-size: 20px;">Verifier Acknowledgment Required</h2>
+
+    <div id="consentStateInitial">
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;">
+        You are about to view a live biometric verification session. The participant's
+        video is processed into a face embedding, and their audio into a voice
+        embedding, for identity and deepfake-detection purposes only.
+      </p>
+
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>What this session involves:</strong><br>
+      &bull; A mathematical face embedding of the participant (not a photo)<br>
+      &bull; A voice embedding of the participant (not a recording)<br>
+      &bull; Video stream metadata for liveness verification</p>
+
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>How long data is kept:</strong> The participant's one-time enrollment face embedding is saved to disk so they don't have to re-enroll every session. Everything else in this session — live embeddings and metadata — is session-only and discarded when it ends. Nothing else is written to disk or sent to a server.</p>
+
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>Your responsibility as verifier:</strong><br>
+      &bull; Use this session only for its stated identity-verification purpose.<br>
+      &bull; End the session promptly once verification is complete.</p>
+
+      <div style="background: #1c2340; border-left: 3px solid #4f6bff; padding: 12px 14px; margin: 16px 0; font-size: 13px; line-height: 1.5; color: #c9d2ea;">
+        <strong>BIOMETRIC DATA NOTICE:</strong> This session involves biometric identifiers belonging to another individual — a persisted enrollment face embedding, plus in-session face and voice embeddings — collected to verify their identity and detect deepfake impersonation. The enrollment embedding is kept on disk until the participant deletes it or re-enrolls. All other session data is retained only for the duration of this session and deleted when it ends.
+      </div>
+
+      <p style="font-size: 12px; color: #7c88ab;">
+        <a href="./privacy-notice.html" target="_blank" rel="noopener" style="color: #8fa8ff;">Full Privacy Notice</a> &middot; Your Rights
+      </p>
+
+      <div style="display: flex; gap: 12px; margin-top: 20px;">
+        <button id="consentBtn" style="
+          flex: 1; padding: 12px 16px; border: none; border-radius: 8px;
+          background: #4f6bff; color: white; font-size: 14px; font-weight: 600;
+          cursor: pointer;
+        ">I acknowledge and agree to proceed</button>
+        <button id="declineBtn" style="
+          padding: 12px 16px; border: 1px solid #3a4468; border-radius: 8px;
+          background: transparent; color: #b7c0d8; font-size: 14px;
+          cursor: pointer;
+        ">Decline</button>
+      </div>
+    </div>
+
+    <div id="consentStateInitializing" style="display: none; text-align: center; padding: 20px 0;">
+      <div style="width: 28px; height: 28px; border: 3px solid #2a3358; border-top-color: #4f6bff; border-radius: 50%; margin: 0 auto 16px; animation: consentSpin 0.8s linear infinite;"></div>
+      <p style="font-size: 14px; color: #b7c0d8;">Connecting to session&hellip;</p>
+    </div>
+
+    <div id="consentStateError" style="display: none;">
+      <p style="font-size: 14px; line-height: 1.5; color: #f2b8b8;">Unable to start the session. Please refresh and try again.</p>
+      <button id="consentRetryBtn" style="
+        margin-top: 12px; padding: 12px 16px; border: none; border-radius: 8px;
+        background: #4f6bff; color: white; font-size: 14px; font-weight: 600; cursor: pointer;
+      ">Retry</button>
+    </div>
+
+    <div id="consentStateDecline" style="display: none;">
+      <p style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">Acknowledgment required to proceed.</p>
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;">
+        Viewing this verification session requires acknowledging how the participant's
+        biometric data is used. Without acknowledgment, you cannot continue.
+      </p>
+      <button id="consentBackBtn" style="
+        margin-top: 16px; padding: 12px 16px; border: 1px solid #3a4468; border-radius: 8px;
+        background: transparent; color: #e8edf8; font-size: 14px; cursor: pointer;
+      ">Back</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  @keyframes consentSpin { to { transform: rotate(360deg); } }
+  body.consent-pending { overflow: hidden; }
+</style>
+
+<script>
+(function(){
+  window.consentGranted = false;
+
+  var overlay      = document.getElementById('consentOverlay');
+  var stInitial     = document.getElementById('consentStateInitial');
+  var stInit        = document.getElementById('consentStateInitializing');
+  var stError       = document.getElementById('consentStateError');
+  var stDecline     = document.getElementById('consentStateDecline');
+  var consentBtn    = document.getElementById('consentBtn');
+  var declineBtn    = document.getElementById('declineBtn');
+  var backBtn       = document.getElementById('consentBackBtn');
+  var retryBtn      = document.getElementById('consentRetryBtn');
+
+  var resolveConsent = null;
+  var focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  function showState(el){
+    [stInitial, stInit, stError, stDecline].forEach(function(s){ s.style.display = 'none'; });
+    el.style.display = 'block';
+  }
+
+  function trapFocus(e){
+    if (overlay.style.display === 'none') return;
+    if (e.key !== 'Tab') return;
+    var focusables = overlay.querySelectorAll(focusableSelector);
+    if (!focusables.length) return;
+    var first = focusables[0], last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
+  }
+
+  document.addEventListener('keydown', trapFocus);
+
+  function closeOverlay(){
+    overlay.style.display = 'none';
+    document.body.classList.remove('consent-pending');
+  }
+
+  window.requestConsent = function(){
+    return new Promise(function(resolve){
+      resolveConsent = resolve;
+      overlay.style.display = 'flex';
+      document.body.classList.add('consent-pending');
+      showState(stInitial);
+      consentBtn.focus();
+    });
+  };
+
+  consentBtn.addEventListener('click', async function(){
+    consentBtn.disabled = true;
+    declineBtn.disabled = true;
+    showState(stInit);
+
+    await new Promise(function(r){ requestAnimationFrame(function(){ requestAnimationFrame(r); }); });
+
+    window.consentGranted = true;
+    closeOverlay();
+    if (resolveConsent) resolveConsent(true);
+  });
+
+  declineBtn.addEventListener('click', function(){
+    showState(stDecline);
+    backBtn.focus();
+  });
+
+  backBtn.addEventListener('click', function(){
+    consentBtn.disabled = false;
+    declineBtn.disabled = false;
+    showState(stInitial);
+    consentBtn.focus();
+  });
+
+  window.showConsentError = function(){
+    overlay.style.display = 'flex';
+    document.body.classList.add('consent-pending');
+    showState(stError);
+    retryBtn.focus();
+  };
+
+  retryBtn.addEventListener('click', function(){
+    closeOverlay();
+    if (window.onConsentRetry) window.onConsentRetry();
+  });
+})();
+</script>
+<!-- ===== End Consent Modal ===== -->
+
 <div id="srStatus" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 <header class="header">
     <div class="header-left">
@@ -174,12 +371,17 @@
 </header>
 <main class="container" id="mainContainer">
     <h2 class="sr-only">Live verification dashboard</h2>
+    <!-- ===== Conflict Alert Banner (Week 3 Day 4) ===== -->
+    <div id="conflictAlert" class="conflict-alert">
+        <span class="conflict-icon">&#x1F6A8;</span>
+        <span id="conflictText">Conflicting signals detected</span>
+    </div>
     <div class="layout-split" id="layoutWrapper">
         <div class="video-panel" id="videoPanel">
-            <video class="video-el" id="localVideo" autoplay playsinline muted></video>
+            <video class="video-el" id="remoteVideo" autoplay playsinline></video>
             <div class="video-placeholder">
                 <div class="video-icon-ring" aria-hidden="true">&#x1F4F9;</div>
-                <div class="video-label-main">Live video feed</div>
+                <div class="video-label-main">Waiting for participant stream&hellip;</div>
             </div>
             <div class="video-badge"><span class="dot" aria-hidden="true"></span> LIVE</div>
             <button class="pip-toggle-btn" id="pipToggleBtn" aria-label="Toggle picture-in-picture window" onclick="togglePip()">&#x229E; PiP</button>
@@ -202,32 +404,32 @@
             </div>
         </div>
         <div class="scores-column">
-            <div class="trust-score-band">
+            <div class="trust-score-band prominent">
                 <div class="trust-header">
                     <h2 class="trust-title">Overall Trust Score</h2>
-                    <span class="trust-status status-suspicious" id="trustStatus">Suspicious</span>
+                    <span class="trust-status" id="trustStatus" style="background:rgba(124,136,171,0.15);color:#7c88ab;">Awaiting</span>
                 </div>
                 <div class="score-gauge">
                     <div class="score-ring-container">
                         <svg viewBox="0 0 88 88" role="img" aria-hidden="true">
                             <circle class="ring-bg" cx="44" cy="44" r="36"/>
-                            <circle class="ring-fill" cx="44" cy="44" r="36" id="ringFill" stroke="var(--warning)" style="stroke-dashoffset:63.28"/>
+                            <circle class="ring-fill" cx="44" cy="44" r="36" id="ringFill" stroke="#7c88ab" style="stroke-dashoffset:226"/>
                         </svg>
                         <div class="ring-label" id="ringLabel" aria-hidden="true">
-                            <span id="trustScore">72</span>
+                            <span id="trustScore">&mdash;</span>
                             <small>/100</small>
                         </div>
                     </div>
                     <div class="score-segments">
                         <div class="segment-bar">
                             <span class="segment-label">Trusted</span>
-                            <div class="segment-track"><div class="segment-fill fill-trusted" id="segTrusted" style="width:0%"></div></div>
+                            <div class="segment-track"><div class="segment-fill fill-trusted" id="segTrusted" style="width:0%;"></div></div>
                             <span class="segment-pct" id="pctTrusted">&mdash;</span>
                         </div>
                         <div class="segment-bar">
                             <span class="segment-label">Suspicious</span>
-                            <div class="segment-track"><div class="segment-fill fill-suspicious" id="segSuspicious" style="width:72%"></div></div>
-                            <span class="segment-pct" id="pctSuspicious">72%</span>
+                            <div class="segment-track"><div class="segment-fill fill-suspicious" id="segSuspicious" style="width:0%;"></div></div>
+                            <span class="segment-pct" id="pctSuspicious">&mdash;</span>
                         </div>
                         <div class="segment-bar">
                             <span class="segment-label">Fraud</span>
@@ -237,52 +439,101 @@
                     </div>
                 </div>
                 <div class="trust-gradient-bar">
-                    <div class="trust-gradient-needle" id="trustNeedle" style="left:72%"></div>
+                    <div class="trust-gradient-needle" id="trustNeedle" style="left:50%"></div>
                 </div>
                 <div class="trust-bar-labels"><span>Fraud</span><span>Suspicious</span><span>Trusted</span></div>
                 <div class="reason-area" id="reasonArea">
                     <span class="reason-icon" id="reasonIcon" aria-hidden="true">&#x26A0;&#xFE0F;</span>
-                    <span id="reasonText">Score reduced due to elevated injection-risk signal and anomalous audio patterns detected in frequency analysis.</span>
+                    <span id="reasonText">Awaiting signals &mdash; no modules have reported yet.</span>
                 </div>
                 <button class="cycle-btn" id="cycleBtn">Cycle test scenario &rarr; (showing simulated data)</button>
+		<div style="display:flex; gap:10px; margin-top:10px;">
+    			<button class="cycle-btn" id="attackBtn" style="background:#3a1420; border-color:#7a2a3a; color:#ff8080;">🚨 Simulate Deepfake Attack</button>
+    			<button class="cycle-btn" id="legitBtn" style="background:#14301c; border-color:#2a6a3a; color:#7dffa0;">✅ Simulate Legit User</button>
+		</div>
             </div>
             <div class="scores-grid">
-                <div class="score-panel panel-good">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Identity</h3><span class="score-chip chip-good" id="chip0">Pass</span></div>
-                    <div class="score-panel-value val-good" id="val0">92</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:92%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
-                    <div class="score-panel-footer" id="foot0">ID document verified</div>
+                <div class="score-panel panel-pending">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Identity</h3><span class="score-chip chip-pending" id="chip0">Pending</span></div>
+                    <div class="score-panel-value" id="val0" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot0">Awaiting identity module&hellip;</div>
+                    <div class="identity-detail" id="identityDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div style="display:flex;justify-content:space-between;color:#8b95b5;">
+                            <span id="identitySimilarity">Similarity: &mdash;</span>
+                            <span id="identityConfidence">&mdash;</span>
+                        </div>
+                        <div id="identityMultiFaceWarning" style="display:none;color:#f2b8b8;margin-top:4px;font-weight:600;">&#9888; Multiple faces detected</div>
+                    </div>
                 </div>
-                <div class="score-panel panel-good">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-good" id="chip1">Pass</span></div>
-                    <div class="score-panel-value val-good" id="val1">88</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:88%;background:linear-gradient(90deg,var(--success),#4ade80)"></div></div>
-                    <div class="score-panel-footer" id="foot1">Challenge passed</div>
+                <div class="score-panel panel-pending">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-pending" id="chip1">Pending</span></div>
+                    <div class="score-panel-value" id="val1" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot1">Awaiting liveness module&hellip;</div>
+                    <div class="liveness-detail" id="livenessDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div id="livenessPrompt" style="font-weight:600;color:var(--text-primary,#e8edf8);margin-bottom:4px;">Waiting for challenge&hellip;</div>
+                        <div style="display:flex;justify-content:space-between;color:#8b95b5;">
+                            <span id="livenessCountdown">&mdash;</span>
+                            <span id="livenessResponseTime">&mdash;</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="score-panel panel-warn">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-warn" id="chip2">Review</span></div>
-                    <div class="score-panel-value val-warn" id="val2">65</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:65%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
-                    <div class="score-panel-footer" id="foot2">Minor artifacts detected</div>
+                <div class="score-panel panel-pending" id="visualPanel">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-pending" id="chip2">Pending</span><span class="panel-badge badge-low" id="visualConfidence" style="display:none;">Low</span></div>
+                    <div class="score-panel-value" id="val2" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot2">Awaiting visual deepfake module&hellip;</div>
+                    <div class="visual-detail" id="visualDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div id="visualFaceState" style="color:#8b95b5;">Face detected</div>
+                        <div id="visualCascade" style="color:#5a6484;margin-top:2px;display:none;">Cascade: <span class="cascade-tooltip" title="Average cascade stage (1 = cheap texture check, 2 = full EfficientNet)">1.4</span></div>
+                    </div>
                 </div>
-                <div class="score-panel panel-warn">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-warn" id="chip3">Review</span></div>
-                    <div class="score-panel-value val-warn" id="val3">78</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:78%;background:linear-gradient(90deg,var(--warning),#fbbf24)"></div></div>
-                    <div class="score-panel-footer" id="foot3">Slight frequency anomaly</div>
+                <div class="score-panel panel-pending" id="audioPanel">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-pending" id="chip3">Pending</span></div>
+                    <div class="score-panel-value" id="val3" style="color:#7c88ab;">—</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot3" style="display:flex;align-items:center;gap:8px;">
+                        <span class="audio-pending-spinner" id="audioSpinner" style="width:12px;height:12px;border:2px solid #2a3358;border-top-color:#7c88ab;border-radius:50%;display:inline-block;animation:consentSpin 0.9s linear infinite;"></span>
+                        <span id="audioFooterText">Lip-sync module not yet connected</span>
+                    </div>
+                    <canvas class="waveform-canvas" id="audioWaveform" width="200" height="40"></canvas>
                 </div>
-                <div class="score-panel panel-bad panel-injection">
-                    <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-bad" id="chip4">Alert</span></div>
-                    <div class="score-panel-value val-bad" id="val4">45</div>
-                    <div class="score-bar"><div class="score-bar-fill" id="bar4" style="width:45%;background:linear-gradient(90deg,var(--danger),#f87171)"></div></div>
-                    <div class="score-panel-footer" id="foot4">Unusual frame timing &mdash; possible replay attack</div>
+                <div class="score-panel panel-pending panel-injection">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-pending" id="chip4">Pending</span></div>
+                    <div class="score-panel-value" id="val4" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar4" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot4">Awaiting security module&hellip;</div>
                     <div class="injection-detail">
-                        <div class="injection-stat"><div class="injection-stat-label">Frame timing deviation</div><div class="injection-stat-value" style="color:var(--danger)">+340ms anomaly</div></div>
-                        <div class="injection-stat"><div class="injection-stat-label">Replay confidence</div><div class="injection-stat-value" style="color:var(--warning)">64%</div></div>
-                        <div class="injection-stat"><div class="injection-stat-label">Signal type</div><div class="injection-stat-value">Frame injection</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Frame timing deviation</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Replay confidence</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Signal type</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div class="session-log-panel" style="
+        margin-top: 16px; background: var(--bg-card, #12172a);
+        border-radius: var(--radius-sm, 10px); border: 1px solid var(--border-light, #232b45);
+        padding: 18px; box-shadow: var(--shadow-sm, none);
+    ">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted,#8b95b5);margin:0;">
+                Session Log <span style="font-weight:400;color:#5a6484;">&middot; continuous verification audit trail</span>
+            </h3>
+            <button id="sessionResetBtn" style="
+                font-size: 11px; padding: 6px 12px; border-radius: 6px;
+                border: 1px solid var(--border-light,#3a4468); background: transparent;
+                color: #b7c0d8; cursor: pointer;
+            ">Reset Session</button>
+        </div>
+        <div id="sessionLogList" style="
+            max-height: 220px; overflow-y: auto; font-size: 12px;
+            display: flex; flex-direction: column-reverse; gap: 6px;
+        ">
+            <div style="color:#5a6484;">No events yet — session log will populate as verification signals arrive.</div>
         </div>
     </div>
 </main>
@@ -511,24 +762,90 @@
     }
     window.addEventListener('resize', updateViewportLabel);
 
-    // Real local camera preview. Requires a secure context (localhost
-    // or https) -- opening this file directly via file:// will not be
-    // able to request the camera.
-    async function startLocalPreview(){
-        var video = document.getElementById('localVideo');
+    // ── Receive the PEER'S stream via WebRTC ─────
+    // index.html is the verifier's dashboard. It does not open its own
+    // camera; it joins the same signaling room as participant.html and
+    // displays whatever stream arrives on ontrack. This device is
+    // receive-only: it never calls getUserMedia() and never sends media.
+    const RTC_ROOM = "demo-room";
+    var rtcSocket, rtcPc;
+    var RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+    function joinAsVerifier(){
+        var video = document.getElementById('remoteVideo');
         var panel = document.getElementById('videoPanel');
         var label = panel.querySelector('.video-label-main');
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            if (label) label.textContent = 'Camera not supported in this browser';
+
+        if (typeof io === 'undefined') {
+            if (label) label.textContent = 'Signaling library failed to load';
             return;
         }
-        try {
-            var stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            video.srcObject = stream;
+
+        rtcSocket = io(window.location.hostname === 'localhost'
+            ? 'http://localhost:5000'
+            : 'http://' + window.location.hostname + ':5000');
+
+        rtcPc = new RTCPeerConnection(RTC_CONFIG);
+
+	rtcPc.addTransceiver('video', { direction: 'recvonly' });
+	rtcPc.addTransceiver('audio', { direction: 'recvonly' });
+
+        // This is the only place this page touches media: receiving the
+        // remote participant's tracks and attaching them to the main
+        // video element (and mirroring into the PiP window via the
+        // existing attachPipStream hook, if in use).
+        rtcPc.ontrack = function(event){
+            video.srcObject = event.streams[0];
             video.onloadedmetadata = function(){ panel.classList.add('stream-active'); };
-        } catch (err) {
-            if (label) label.textContent = 'Camera unavailable \u2014 check permissions';
-        }
+        };
+
+        rtcPc.onicecandidate = function(event){
+            if (event.candidate) {
+                rtcSocket.emit('ice-candidate', { room: RTC_ROOM, candidate: event.candidate });
+            }
+        };
+
+// Status-only now -- offer creation is triggered by the
+        // server's 'ready-to-offer' event instead, which fires
+        // deterministically once both roles have joined.
+        rtcSocket.on('peer-joined', function(){
+            if (label) label.textContent = 'Participant joined — negotiating...';
+        });
+
+        rtcSocket.on('ready-to-offer', async function(){
+            if (label) label.textContent = 'Participant joined — negotiating...';
+            var offer = await rtcPc.createOffer();
+            await rtcPc.setLocalDescription(offer);
+            rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
+        });
+
+        rtcSocket.on('peer-already-present', async function(){
+            var offer = await rtcPc.createOffer();
+            await rtcPc.setLocalDescription(offer);
+            rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
+        });
+
+        rtcSocket.on('offer', async function(data){
+            await rtcPc.setRemoteDescription(data.sdp);
+            var answer = await rtcPc.createAnswer();
+            await rtcPc.setLocalDescription(answer);
+            rtcSocket.emit('answer', { room: RTC_ROOM, sdp: answer });
+        });
+
+        rtcSocket.on('answer', async function(data){
+            await rtcPc.setRemoteDescription(data.sdp);
+        });
+
+        rtcSocket.on('ice-candidate', async function(data){
+            try {
+                await rtcPc.addIceCandidate(data.candidate);
+            } catch (err) {
+                console.error('ICE candidate error:', err);
+            }
+        });
+
+        rtcSocket.emit('join', { room: RTC_ROOM, role: 'verifier' });
+        if (label) label.textContent = 'Waiting for participant to join...';
     }
 
     // Hook for the Day 2 WebRTC signaling page (call.html): once your
@@ -563,9 +880,161 @@ async function fetchLiveScores() {
     }
 }
 
+// ── Liveness challenge rendering (Day 4) ────
+const CHALLENGE_DISPLAY_NAMES = {
+    blink:      'Blink',
+    turn_left:  'Turn head left',
+    turn_right: 'Turn head right'
+};
+
+const FAIL_REASON_DISPLAY = {
+    timeout:                  'Timed out — no response detected',
+    wrong_direction:          'Wrong direction detected',
+    spoof_detected:           'Spoof detected (texture/depth anomaly)',
+    multiple_faces_detected:  'Multiple faces detected in frame'
+};
+
+let lastRenderedChallengeTimestamp = null;
+
+function renderLivenessChallenge(challenge) {
+    const promptEl   = document.getElementById('livenessPrompt');
+    const countdownEl = document.getElementById('livenessCountdown');
+    const responseEl  = document.getElementById('livenessResponseTime');
+    const footEl      = document.getElementById('foot1');
+    if (!promptEl) return;
+
+    if (!challenge) {
+        promptEl.textContent = 'Waiting for challenge...';
+        countdownEl.textContent = '—';
+        responseEl.textContent = '—';
+        if (footEl) footEl.textContent = 'Awaiting liveness module...';
+        return;
+    }
+
+    const typeName = CHALLENGE_DISPLAY_NAMES[challenge.challenge_type] || challenge.challenge_type;
+    lastRenderedChallengeTimestamp = challenge.timestamp;
+
+    if (challenge.challenge_passed) {
+        promptEl.textContent = '"' + challenge.prompt + '" (' + typeName + ') — ✓ Passed';
+        countdownEl.textContent = 'Within ' + challenge.timeout_sec + 's window';
+        responseEl.textContent = challenge.response_time_ms + 'ms response';
+        if (footEl) footEl.textContent = typeName + ' challenge passed in ' + challenge.response_time_ms + 'ms';
+    } else {
+        const reasonText = FAIL_REASON_DISPLAY[challenge.fail_reason] || challenge.fail_reason;
+        promptEl.textContent = '"' + challenge.prompt + '" (' + typeName + ') — ✗ Failed';
+        countdownEl.textContent = reasonText;
+        responseEl.textContent = challenge.response_time_ms + 'ms response';
+        if (footEl) footEl.textContent = typeName + ' challenge failed — ' + reasonText;
+    }
+}
+
+
+// ── Identity match rendering (Day 5) ────────
+const CONFIDENCE_DISPLAY = {
+    high: 'High confidence',
+    low:  'Low confidence — uncertain zone',
+    none: 'No confidence — no clear face match'
+};
+
+function renderIdentityDetail(identity) {
+    const simEl    = document.getElementById('identitySimilarity');
+    const confEl   = document.getElementById('identityConfidence');
+    const warnEl   = document.getElementById('identityMultiFaceWarning');
+    const footEl   = document.getElementById('foot0');
+    if (!simEl) return;
+
+    if (!identity) {
+        simEl.textContent = 'Similarity: —';
+        confEl.textContent = '—';
+        warnEl.style.display = 'none';
+        if (footEl) footEl.textContent = 'Awaiting identity module...';
+        return;
+    }
+
+    const simPct = (identity.similarity_score * 100).toFixed(1);
+    simEl.textContent = 'Similarity: ' + simPct + '% (threshold ' + (identity.threshold_used * 100).toFixed(0) + '%)';
+    confEl.textContent = CONFIDENCE_DISPLAY[identity.confidence] || identity.confidence;
+    confEl.style.color = identity.confidence === 'high' ? '#4ade80'
+                        : identity.confidence === 'low'  ? '#fbbf24'
+                        : '#f87171';
+
+    warnEl.style.display = identity.multiple_faces_detected ? 'block' : 'none';
+
+    if (footEl) {
+        if (identity.verdict === 'REAL') {
+            footEl.textContent = 'Identity match confirmed — ' + simPct + '% similarity';
+        } else if (identity.confidence === 'low') {
+            footEl.textContent = 'Uncertain match — ' + simPct + '% similarity, below confident threshold';
+        } else {
+            footEl.textContent = 'Identity mismatch — ' + simPct + '% similarity';
+        }
+    }
+}
+
+
+// ── Session log rendering (Day 6-7 stretch goal) ────
+// Mirrors NIST SP 800-63-4's continuous-evaluation framing: the
+// dashboard doesn't just show a point-in-time score, it shows the
+// timestamped trail of every signal that fed into it.
+const LOG_EVENT_STYLE = {
+    liveness_challenge: { icon: '&#128065;', color: '#8fa8ff' },
+    identity_check:      { icon: '&#128100;', color: '#8fa8ff' },
+    band_change:         { icon: '&#9888;',   color: '#fbbf24' },
+    injection_alert:     { icon: '&#128246;', color: '#f87171' },
+    audio_alert:         { icon: '&#127911;', color: '#f87171' },
+    session_reset:       { icon: '&#8635;',   color: '#7c88ab' }
+};
+
+const BAND_LOG_COLOR = { trusted: '#4ade80', suspicious: '#fbbf24', fraud: '#f87171' };
+
+let lastRenderedLogLength = 0;
+
+function renderSessionLog(log) {
+    const listEl = document.getElementById('sessionLogList');
+    if (!listEl) return;
+
+    if (!log || log.length === 0) {
+        listEl.innerHTML = '<div style="color:#5a6484;">No events yet — session log will populate as verification signals arrive.</div>';
+        lastRenderedLogLength = 0;
+        return;
+    }
+
+    // Only re-render when new entries have actually arrived, so the
+    // scroll position and any hover state isn't reset every 1.5s poll.
+    if (log.length === lastRenderedLogLength) return;
+    lastRenderedLogLength = log.length;
+
+    listEl.innerHTML = log.map(function(entry){
+        const style = LOG_EVENT_STYLE[entry.event_type] || { icon: '&#8226;', color: '#8b95b5' };
+        const color = entry.event_type === 'band_change' && entry.band
+            ? (BAND_LOG_COLOR[entry.band] || style.color)
+            : style.color;
+        const time = new Date(entry.timestamp).toLocaleTimeString();
+        return '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">' +
+            '<span style="color:#5a6484;font-variant-numeric:tabular-nums;white-space:nowrap;">' + time + '</span>' +
+            '<span style="color:' + color + ';">' + style.icon + '</span>' +
+            '<span style="color:#c9d2ea;">' + entry.detail + '</span>' +
+        '</div>';
+    }).join('');
+}
+
+document.getElementById('sessionResetBtn').addEventListener('click', async function(){
+    if (!confirm('Reset the session? This clears all verification signals and the log.')) return;
+    try {
+        await fetch('http://localhost:5000/session-reset', { method: 'POST' });
+        lastRenderedLogLength = 0;
+        fetchLiveScores();
+    } catch (err) {
+        console.error('Session reset failed:', err);
+    }
+});
+
+
 function applyLiveData(data) {
     // ── Trust score + band ──────────────────────
-    const trust = data.trust_score;
+    let trust = data.ema_trust_score !== null && data.ema_trust_score !== undefined
+        ? data.ema_trust_score
+        : data.trust_score;
     const band  = data.trust_band;  // "trusted" | "suspicious" | "fraud"
 
     if (trust === null || trust === undefined) {
@@ -617,9 +1086,23 @@ function applyLiveData(data) {
     document.getElementById('srStatus').textContent =
         'Trust score ' + trust + ' out of 100, ' + s.text + '. ' + (data.reason || '');
 
+    // ── Conflict Alert Banner (Week 3 Day 4) ────
+    const conflictAlert = document.getElementById('conflictAlert');
+    const conflictText = document.getElementById('conflictText');
+    if (data.conflict_detected && conflictAlert) {
+        conflictAlert.classList.add('visible');
+        const ct = (data.conflict_types || []).join(', ')
+            .replace(/identity_vs_visual_deepfake/g, 'identity matched but visual deepfake risk is elevated')
+            .replace(/liveness_vs_injection/g, 'liveness passed but injection risk is high');
+        conflictText.textContent = 'Conflicting signals detected — ' + ct;
+    } else if (conflictAlert) {
+        conflictAlert.classList.remove('visible');
+    }
+
     // ── Five signal panels ──────────────────────
     const sig   = data.signals || {};
     const tiers = data.tiers   || {};
+    const missing = data.signal_missing || [];
 
     const PANELS = [
         { id: 0, label: 'Identity',        field: 'identity_score',        tier: tiers.identity        },
@@ -635,81 +1118,340 @@ function applyLiveData(data) {
         bad:  { chipCls: 'chip-bad',  panelCls: 'panel-bad',  valCls: 'val-bad',  bar: 'linear-gradient(90deg,var(--danger),#f87171)',  chip: 'Alert' }
     };
 
+    // Map field names to module names for signal_missing check
+    const FIELD_TO_MODULE = {
+        'identity_score': 'identity',
+        'liveness_score': 'vision',
+        'visual_deepfake_score': 'visual_deepfake',
+        'audio_deepfake_score': 'audio',
+        'injection_risk_score': 'security'
+    };
+
     PANELS.forEach(panel => {
         const score    = sig[panel.field];
         const tierKey  = panel.tier || 'warn';
         const style    = TIER_STYLES[tierKey] || TIER_STYLES.warn;
-        const hasScore = score !== null && score !== undefined;
+        const moduleName = FIELD_TO_MODULE[panel.field];
+        const isMissing = missing.includes(moduleName);
+        const hasScore = score !== null && score !== undefined && !isMissing;
 
         const panelEl = document.querySelector('.score-panel:nth-child(' + (panel.id + 1) + ')');
         if (panelEl) {
-            panelEl.classList.remove('panel-good', 'panel-warn', 'panel-bad');
-            panelEl.classList.add(style.panelCls);
+            panelEl.classList.remove('panel-good', 'panel-warn', 'panel-bad', 'panel-pending');
+            panelEl.classList.add(hasScore ? style.panelCls : 'panel-pending');
         }
 
         const valEl = document.getElementById('val' + panel.id);
         if (valEl) {
             valEl.textContent = hasScore ? Math.round(score) : '—';
             valEl.className   = 'score-panel-value ' + (hasScore ? style.valCls : '');
+            if (!hasScore) valEl.style.color = '#7c88ab';
         }
 
         const barEl = document.getElementById('bar' + panel.id);
         if (barEl) {
             barEl.style.width      = hasScore ? score + '%' : '0%';
-            barEl.style.background = style.bar;
+            barEl.style.background = hasScore ? style.bar : 'transparent';
         }
 
         const chipEl = document.getElementById('chip' + panel.id);
         if (chipEl) {
             chipEl.textContent = hasScore ? style.chip : 'Pending';
-            chipEl.className   = 'score-chip ' + (hasScore ? style.chipCls : '');
+            chipEl.className   = 'score-chip ' + (hasScore ? style.chipCls : 'chip-pending');
         }
 
         const footEl = document.getElementById('foot' + panel.id);
-        if (footEl) {
+        const isCustomFooter = panel.field === 'liveness_score' || panel.field === 'identity_score'
+            || (panel.field === 'audio_deepfake_score' && !hasScore);
+        if (footEl && !isCustomFooter) {
             footEl.textContent = hasScore
                 ? panel.label + ' score: ' + Math.round(score)
                 : 'Awaiting ' + panel.label.toLowerCase() + ' module...';
         }
+
+        // Show/hide spinner for missing signals (audio panel already has one)
+        if (panel.field === 'audio_deepfake_score') {
+            const spinner = document.getElementById('audioSpinner');
+            const footerText = document.getElementById('audioFooterText');
+            if (spinner && footerText) {
+                spinner.style.display = isMissing ? 'inline-block' : 'none';
+                footerText.textContent = isMissing ? 'Audio module not yet connected' : (hasScore ? panel.label + ' score: ' + Math.round(score) : 'Awaiting audio module...');
+            }
+        }
     });
+
+    // ── Liveness challenge detail (Day 4) ───────
+    // Shows the exact prompt M1 issued, a live countdown against its
+    // timeout, and the pass/fail result with response time — this is
+    // the "story, not just a score" panel.
+    renderLivenessChallenge(data.challenge);
+    renderIdentityDetail(data.identity);
+    renderSessionLog(data.session_log);
+
+    // ── Visual deepfake panel extras (Week 3 Day 1) ────
+    // Reads from data.visual_deepfake — M1's real "visual_deepfake" module
+    // payload (deepfake_probability, confidence, cascade_stage, latency,
+    // skipped) — NOT data.raw.vision, which is M1's separate Week 2
+    // liveness-challenge module and never carries these fields.
+    const vdf = data.visual_deepfake;
+    const visualConf = document.getElementById('visualConfidence');
+    const visualFace = document.getElementById('visualFaceState');
+    const visualCascade = document.getElementById('visualCascade');
+
+    if (visualConf && vdf && vdf.confidence) {
+        visualConf.style.display = 'inline-block';
+        visualConf.textContent = vdf.confidence;
+        visualConf.className = 'panel-badge badge-' + (vdf.confidence === 'high' ? 'high' : 'low');
+    } else if (visualConf) {
+        visualConf.style.display = 'none';
+    }
+
+    if (visualFace) {
+        if (!vdf) {
+            visualFace.textContent = 'Awaiting visual deepfake module...';
+            visualFace.style.color = '#8b95b5';
+        } else if (vdf.skipped) {
+            visualFace.textContent = 'Frame skipped (subsampling) — showing last scored value';
+            visualFace.style.color = '#7c88ab';
+        } else {
+            const pct = (vdf.deepfake_probability * 100).toFixed(1);
+            visualFace.textContent = 'Deepfake probability: ' + pct + '%';
+            visualFace.style.color = vdf.deepfake_probability > 0.5 ? '#f2b8b8' : '#8b95b5';
+        }
+    }
+
+    if (visualCascade && vdf && vdf.cascade_stage !== null && vdf.cascade_stage !== undefined) {
+        visualCascade.style.display = 'block';
+        const stageLabel = vdf.cascade_stage === 0 ? 'skipped' : vdf.cascade_stage === 1 ? '1 (texture)' : '2 (EfficientNet)';
+        visualCascade.querySelector('.cascade-tooltip').textContent = stageLabel;
+        if (vdf.latency_ms_avg !== null && vdf.latency_ms_avg !== undefined && vdf.latency_ms_avg > 0) {
+            visualCascade.querySelector('.cascade-tooltip').textContent += ' · ' + vdf.latency_ms_avg + 'ms';
+        }
+    } else if (visualCascade) {
+        visualCascade.style.display = 'none';
+    }
+
+    // ── Audio waveform visualiser (Week 3 Day 2) ────
+    const waveCanvas = document.getElementById('audioWaveform');
+    if (waveCanvas) {
+        const ctx = waveCanvas.getContext('2d');
+        const w = waveCanvas.width;
+        const h = waveCanvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = 'var(--bg-tertiary, #1a2236)';
+        ctx.fillRect(0, 0, w, h);
+        // Draw a simulated amplitude waveform (will be replaced with real audio data when connected)
+        const hasAudio = sig.audio_deepfake_score !== null && sig.audio_deepfake_score !== undefined;
+        if (hasAudio) {
+            ctx.strokeStyle = sig.audio_deepfake_score >= 80 ? 'var(--success, #22c97a)' : sig.audio_deepfake_score >= 50 ? 'var(--warning, #f6c842)' : 'var(--danger, #ff5a5a)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (let x = 0; x < w; x++) {
+                const normalized = (sig.audio_deepfake_score || 50) / 100;
+                const amp = (1 - normalized) * (h / 2) * 0.8; // higher spoof = more erratic
+                const y = (h / 2) + Math.sin(x * 0.2 + Date.now() * 0.005) * amp * (0.5 + Math.random() * 0.5);
+                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+    }
 
     // ── Modules reporting count ─────────────────
     const reporting = data.modules_reporting || [];
+    const missingCount = (data.signal_missing || []).length;
     document.getElementById('sessionIdText').textContent =
         'Session ID: ' + generateSessionId() +
-        ' · ' + reporting.length + '/3 modules active';
+        ' · ' + reporting.length + '/4 modules active' +
+        (missingCount > 0 ? ' · ' + missingCount + ' missing' : '');
 }
 
 // ── Cycle button now sends a test payload ───
 // Useful for demoing without all modules running.
 document.getElementById('cycleBtn').textContent = 'Send test payload to backend →';
 document.getElementById('cycleBtn').addEventListener('click', async () => {
-    const testPayload = {
+    const types = ['blink', 'turn_left', 'turn_right'];
+    const prompts = { blink: 'Please blink twice', turn_left: 'Turn your head left', turn_right: 'Turn your head right' };
+    const type = types[Math.floor(Math.random() * types.length)];
+    const passed = Math.random() > 0.35;
+    const failReasons = ['timeout', 'wrong_direction', 'spoof_detected', 'multiple_faces_detected'];
+
+    const visionPayload = {
         module: "vision",
+        session_id: "demo_test_" + Date.now(),
+        timestamp: Date.now(),
+        payload: {
+            challenge_type: type,
+            prompt: prompts[type],
+            timeout_sec: 5.0,
+            challenge_passed: passed,
+            fail_reason: passed ? null : failReasons[Math.floor(Math.random() * failReasons.length)],
+            metrics: {
+                response_time_ms: Math.round(400 + Math.random() * 2000),
+                blink_count_detected: type === 'blink' ? 1 : 0,
+                avg_texture_score: Math.round(50 + Math.random() * 50),
+                max_yaw_deviation: Math.round((Math.random() - 0.5) * 40)
+            }
+        }
+    };
+
+    // Randomly land in match / mismatch / uncertain zone, mirroring
+    // M3's three confirmed example payloads.
+    const similarity = Math.random();
+    let confidence, verdict;
+    if (similarity >= 0.60) { confidence = 'high'; verdict = 'REAL'; }
+    else if (similarity >= 0.50) { confidence = 'low'; verdict = 'FAKE'; }
+    else { confidence = 'none'; verdict = 'FAKE'; }
+
+    const identityPayload = {
+        module: "identity",
         session_id: "demo_test_" + Date.now(),
         timestamp: new Date().toISOString(),
         face_detected: true,
-        multi_face_alert: false,
-        identity_score: Math.round(60 + Math.random() * 40),
-        liveness_score: Math.round(60 + Math.random() * 40),
-        visual_deepfake_score: Math.round(60 + Math.random() * 40),
-        verdict: "REAL"
+        multiple_faces_detected: Math.random() < 0.08,
+        identity_score: Math.round(similarity * 100),
+        similarity_score: Number(similarity.toFixed(3)),
+        threshold_used: 0.6,
+        confidence: confidence,
+        verdict: verdict
     };
+
     try {
         await fetch('http://localhost:5000/score', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(testPayload)
+            body: JSON.stringify(visionPayload)
+        });
+        await fetch('http://localhost:5000/score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(identityPayload)
         });
     } catch (err) {
         console.error('Test payload send failed:', err);
     }
 });
 
+// ── Audio waveform animation loop (Week 3 Day 2) ────
+(function animateWaveform(){
+    const canvas = document.getElementById('audioWaveform');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg-tertiary') || '#1a2236';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#3a4468';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = 0; x < w; x++) {
+            const y = (h / 2) + Math.sin(x * 0.15 + Date.now() * 0.003) * (h / 6) * (0.6 + Math.random() * 0.4);
+            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+    requestAnimationFrame(animateWaveform);
+})();
+
 // ── Boot sequence ───────────────────────────
 updateViewportLabel();
 document.getElementById('sessionIdText').textContent = 'Session ID: ' + generateSessionId();
-startLocalPreview();
+async function bootVerifier(){
+    await window.requestConsent();
+    window.onConsentRetry = bootVerifier;
+    joinAsVerifier();
+}
+bootVerifier();
+
+// ── Attack / Legit deterministic demo simulators ───
+// Unlike the random cycleBtn payloads, these are FIXED so the live
+// demo is 100% predictable: attack always tanks the score hard,
+// legit always brings it back to a clean "Trusted" state.
+async function postScore(payload) {
+    await fetch('http://localhost:5000/score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+}
+
+async function simulateAttack() {
+    const sid = "attack_demo_" + Date.now();
+    const ts = Date.now();
+
+    await postScore({
+        module: "vision", session_id: sid, timestamp: ts,
+        payload: {
+            challenge_type: "blink_twice", prompt: "Please blink twice",
+            timeout_sec: 5.0, challenge_passed: false, fail_reason: "spoof_detected",
+            metrics: { response_time_ms: 4200, blink_count_detected: 0, avg_texture_score: 22, max_yaw_deviation: 3 }
+        }
+    });
+
+    await postScore({
+        module: "identity", session_id: sid, timestamp: new Date().toISOString(),
+        face_detected: true, multiple_faces_detected: true,
+        identity_score: 22, similarity_score: 0.22, threshold_used: 0.6,
+        confidence: "none", verdict: "FAKE"
+    });
+
+    await postScore({
+        module: "visual_deepfake", session_id: sid, timestamp: ts,
+        deepfake_probability: 0.94, confidence: "high", skipped: false
+    });
+
+    await postScore({
+        module: "audio", session_id: sid, timestamp: ts,
+        voice_detected: true, audio_deepfake_score: 18, verdict: "FAKE"
+    });
+
+    await postScore({
+        module: "security", session_id: sid, timestamp: ts,
+        virtual_camera_detected: true, injection_risk_score: 12,
+        frame_timing_anomaly_score: 15, verdict: "FAKE"
+    });
+}
+
+async function simulateLegit() {
+    const sid = "legit_demo_" + Date.now();
+    const ts = Date.now();
+
+    await postScore({
+        module: "vision", session_id: sid, timestamp: ts,
+        payload: {
+            challenge_type: "turn_left", prompt: "Turn your head left",
+            timeout_sec: 5.0, challenge_passed: true, fail_reason: null,
+            metrics: { response_time_ms: 900, blink_count_detected: 0, avg_texture_score: 92, max_yaw_deviation: 28 }
+        }
+    });
+
+    await postScore({
+        module: "identity", session_id: sid, timestamp: new Date().toISOString(),
+        face_detected: true, multiple_faces_detected: false,
+        identity_score: 95, similarity_score: 0.95, threshold_used: 0.6,
+        confidence: "high", verdict: "REAL"
+    });
+
+    await postScore({
+        module: "visual_deepfake", session_id: sid, timestamp: ts,
+        deepfake_probability: 0.03, confidence: "high", skipped: false
+    });
+
+    await postScore({
+        module: "audio", session_id: sid, timestamp: ts,
+        voice_detected: true, audio_deepfake_score: 93, verdict: "REAL"
+    });
+
+    await postScore({
+        module: "security", session_id: sid, timestamp: ts,
+        virtual_camera_detected: false, injection_risk_score: 90,
+        frame_timing_anomaly_score: 88, verdict: "REAL"
+    });
+}
+
+document.getElementById('attackBtn').addEventListener('click', simulateAttack);
+document.getElementById('legitBtn').addEventListener('click', simulateLegit);
+
 setInterval(fetchLiveScores, 1500);  // poll every 1.5 seconds
 fetchLiveScores();                   // also fire immediately on load
 </script>

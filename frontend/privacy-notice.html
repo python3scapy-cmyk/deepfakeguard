@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DeepfakeGuard — Privacy Notice</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #0b0f1a;
+      color: #e8edf8;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+      line-height: 1.6;
+    }
+    h1 { font-size: 26px; margin-bottom: 4px; }
+    .meta { color: #7c88ab; font-size: 13px; margin-bottom: 32px; }
+    h2 {
+      font-size: 18px;
+      margin-top: 36px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #232b45;
+    }
+    p, li { color: #c9d2ea; font-size: 15px; }
+    .callout {
+      background: #1c2340;
+      border-left: 3px solid #4f6bff;
+      padding: 12px 16px;
+      margin: 16px 0;
+      font-size: 14px;
+      color: #dbe2f5;
+    }
+    .callout.warn { border-left-color: #f6c842; }
+    a { color: #8fa8ff; }
+    .back-link { display: inline-block; margin-top: 40px; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <h1>DeepfakeGuard — Privacy Notice</h1>
+  <p class="meta">Last Updated: [fill in date] &middot; Version 2</p>
+
+  <h2>1. Controller Identity</h2>
+  <p>
+    This session is operated by the <strong>DeepfakeGuard Team</strong>.
+    For any questions about this notice or your data, contact:
+    <a href="mailto:placeholder@example.com">placeholder@example.com</a> [fill in real contact email before any real deployment].
+  </p>
+
+  <h2>2. Categories of Data</h2>
+  <ul>
+    <li><strong>Enrollment face embedding</strong> — a 512-dimensional mathematical vector representation of your face, captured once during enrollment (<code>python -m security.enroll</code>). Not a photograph.</li>
+    <li><strong>Live verification face embedding</strong> — the same kind of vector, computed per-frame during a live session to compare against the enrolled embedding.</li>
+    <li><strong>Voice embedding</strong> — a mathematical vector representation of vocal characteristics, not an audio recording.</li>
+    <li><strong>Session metadata</strong> — timestamps and liveness-check flags associated with the verification session.</li>
+  </ul>
+  <div class="callout warn">
+    <strong>The enrollment face embedding is written to disk</strong> (as
+    <code>security/enrolled_face.json</code>) so that it can be reused across
+    verification sessions without re-enrolling every time. This is the one
+    exception to "nothing is persisted" — see Section 4 for exactly what
+    that means and how long it's kept.
+  </div>
+  <div class="callout">
+    Aside from the enrollment embedding above, we do not collect photographs,
+    audio recordings, or video files, and no other data is written to disk.
+  </div>
+
+  <h2>3. Legal Basis</h2>
+  <ul>
+    <li><strong>GDPR:</strong> Explicit consent under Article 9(2)(a) for processing special category (biometric) data.</li>
+    <li><strong>US / BIPA:</strong> Written consent obtained via the in-app consent modal before any data collection begins.</li>
+  </ul>
+
+  <h2>4. Retention &amp; Deletion</h2>
+  <p>
+    <strong>Enrollment embedding:</strong> persisted to disk in
+    <code>security/enrolled_face.json</code> until you explicitly delete it or
+    re-enroll (which overwrites it). It is not automatically deleted at the
+    end of a session — it is designed to persist across sessions so you don't
+    have to re-enroll every time. To delete it, remove the file directly or
+    ask the team operating this instance to delete it for you.
+  </p>
+  <p>
+    <strong>Live verification data:</strong> per-frame face embeddings computed
+    during a session, voice embeddings, and session metadata are held in
+    memory only for the duration of the session. When the session ends —
+    whether by closing the browser tab, closing the app, or clicking "End
+    Session" — this data is dereferenced and garbage-collected from memory.
+    None of it is written to disk.
+  </p>
+
+  <h2>5. Third-Party Disclosure</h2>
+  <div class="callout">
+    None. All processing occurs on your device. No data is transmitted to our
+    servers or any third party.
+  </div>
+  <p style="font-size: 13px; color: #7c88ab;">
+    This statement reflects the architecture confirmed by the engineering team as of
+    this document's last update (see <code>consent-copy-v1.md</code> in the repository
+    for the underlying confirmation). If the system architecture changes — for example,
+    if any model is moved to a cloud-hosted endpoint, or the enrollment embedding is
+    synced anywhere off-device — this section must be revised before that change ships.
+  </p>
+
+  <h2>6. Your Rights</h2>
+  <ul>
+    <li><strong>Right to withdraw consent</strong> — you may end a live verification session at any time, which immediately stops all in-session data collection.</li>
+    <li><strong>Right to erasure</strong> — live session data is automatically deleted when a session ends, with no further action required. The persisted enrollment embedding is deleted only on explicit request or re-enrollment (see Section 4) — it is not automatically erased at session end.</li>
+  </ul>
+
+  <h2>7. Data Security</h2>
+  <p>
+    The enrollment embedding is stored as plaintext JSON on local disk at
+    <code>security/enrolled_face.json</code> and is not encrypted at rest in
+    this version. In-session embeddings (live face, voice) are held in RAM
+    only and are never persisted to <code>localStorage</code>,
+    <code>IndexedDB</code>, or the filesystem. Communication between the
+    verification modules occurs entirely in-memory within the same session.
+  </p>
+
+  <p class="back-link"><a href="javascript:window.close()">&larr; Close this window</a></p>
+
+</body>
+</html>
