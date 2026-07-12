@@ -1,361 +1,393 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DeepfakeGuard — Identity Capture</title>
-
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-
-<style>
-  :root{
-    /* Palette inherited from the verifier dashboard's dark theme so the two
-       pages read as one product. Nothing invented. */
-    --void:#04070f;
-    --hull:#0a0e1a;
-    --panel:#121a2c;
-    --panel-2:#161f34;
-    --line:#1e2d47;
-    --line-soft:#172239;
-    --ink:#e8edf8;
-    --ink-dim:#8fa0c0;
-    --ink-mute:#56678a;
-    --indigo:#6b8aff;
-    --indigo-dim:rgba(107,138,255,.12);
-    --mint:#22c97a;
-    --amber:#f6c842;
-    --rose:#ff5a5a;
-    --mono:'JetBrains Mono',ui-monospace,monospace;
-    --sans:'Inter',-apple-system,sans-serif;
-  }
-
-  *{box-sizing:border-box;margin:0;padding:0;}
-
-  body{
-    font-family:var(--sans);
-    background:var(--hull);
-    color:var(--ink);
-    min-height:100vh;
-    display:flex;flex-direction:column;align-items:center;
-    padding:24px 20px 40px;
-    /* faint instrument grid — ambient, not decorative noise */
-    background-image:
-      linear-gradient(rgba(107,138,255,.028) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(107,138,255,.028) 1px,transparent 1px);
-    background-size:44px 44px;
-  }
-
-  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;}
-  button:focus-visible,a:focus-visible{outline:2px solid var(--indigo);outline-offset:2px;}
-
-  /* ── top rail ───────────────────────────── */
-  .rail{
-    width:100%;max-width:560px;
-    display:flex;justify-content:space-between;align-items:center;
-    padding-bottom:14px;margin-bottom:18px;
-    border-bottom:1px solid var(--line-soft);
-  }
-  .brand{display:flex;align-items:center;gap:9px;}
-  .brand-mark{
-    width:9px;height:9px;border-radius:2px;background:var(--indigo);
-    box-shadow:0 0 10px var(--indigo);
-  }
-  .brand-name{
-    font-family:var(--mono);font-size:11px;font-weight:700;
-    letter-spacing:2.2px;text-transform:uppercase;color:var(--ink-dim);
-  }
-  .rail-session{
-    font-family:var(--mono);font-size:10px;font-weight:500;
-    letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-mute);
-  }
-
-  /* ── headline ───────────────────────────── */
-  .head{width:100%;max-width:560px;margin-bottom:18px;}
-  .head h1{
-    font-size:23px;font-weight:800;letter-spacing:-.5px;line-height:1.2;
-    margin-bottom:6px;
-  }
-  .head p{font-size:13.5px;line-height:1.55;color:var(--ink-dim);max-width:44ch;}
-
-  /* ── capture stage ──────────────────────── */
-  .stage{
-    width:100%;max-width:560px;position:relative;
-    border-radius:14px;overflow:hidden;
-    background:var(--void);
-    border:1px solid var(--line);
-    box-shadow:0 20px 60px rgba(0,0,0,.55);
-    min-height:300px;
-  }
-  /* video + canvas share one mirrored wrapper, so overlay geometry
-     lands on the face without any coordinate flipping */
-  .mirror{transform:scaleX(-1);display:block;position:relative;}
-  #localPreview{width:100%;display:block;background:var(--void);}
-  #hud{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
-
-  /* DOM overlays sit OUTSIDE .mirror so text never reads backwards */
-  .chip{
-    position:absolute;z-index:3;
-    font-family:var(--mono);font-size:10px;font-weight:700;
-    letter-spacing:1.3px;text-transform:uppercase;
-    padding:5px 10px;border-radius:6px;
-    background:rgba(4,7,15,.72);backdrop-filter:blur(10px);
-    border:1px solid rgba(255,255,255,.09);
-    display:flex;align-items:center;gap:7px;
-    transition:color .3s,border-color .3s;
-  }
-  .chip-state{top:14px;left:14px;color:var(--ink-dim);}
-  .chip-state .pip{
-    width:6px;height:6px;border-radius:50%;background:var(--ink-mute);
-    transition:background .3s,box-shadow .3s;
-  }
-  .chip-state[data-s="lock"]{color:var(--mint);border-color:rgba(34,201,122,.35);}
-  .chip-state[data-s="lock"] .pip{background:var(--mint);box-shadow:0 0 8px var(--mint);}
-  .chip-state[data-s="scan"]{color:var(--indigo);border-color:rgba(107,138,255,.35);}
-  .chip-state[data-s="scan"] .pip{background:var(--indigo);box-shadow:0 0 8px var(--indigo);animation:blip 1.1s infinite;}
-  .chip-state[data-s="done"]{color:var(--mint);border-color:rgba(34,201,122,.5);background:rgba(34,201,122,.1);}
-  .chip-state[data-s="done"] .pip{background:var(--mint);box-shadow:0 0 10px var(--mint);}
-  @keyframes blip{0%,100%{opacity:1;}50%{opacity:.25;}}
-
-  .chip-pct{
-    top:14px;right:14px;color:var(--ink);gap:2px;
-    font-variant-numeric:tabular-nums;
-  }
-  .chip-pct b{font-weight:700;}
-  .chip-pct span{color:var(--ink-mute);font-weight:500;}
-
-  .guide{
-    position:absolute;left:50%;bottom:16px;transform:translateX(-50%);
-    z-index:3;white-space:nowrap;
-    font-size:12.5px;font-weight:600;letter-spacing:.1px;
-    padding:8px 15px;border-radius:8px;
-    background:rgba(4,7,15,.78);backdrop-filter:blur(10px);
-    border:1px solid rgba(255,255,255,.09);
-    color:var(--ink);
-    transition:opacity .25s,color .25s,border-color .25s;
-  }
-  .guide[data-tone="ok"]{color:var(--mint);border-color:rgba(34,201,122,.3);}
-  .guide[data-tone="warn"]{color:var(--amber);border-color:rgba(246,200,66,.3);}
-
-  /* ── telemetry strip ────────────────────── */
-  .telemetry{
-    width:100%;max-width:560px;margin-top:14px;
-    display:grid;grid-template-columns:repeat(4,1fr);
-    background:var(--panel);
-    border:1px solid var(--line);
-    border-radius:12px;overflow:hidden;
-  }
-  .tel{padding:12px 8px 11px;text-align:center;border-right:1px solid var(--line-soft);}
-  .tel:last-child{border-right:none;}
-  .tel-k{
-    font-family:var(--mono);font-size:9px;font-weight:500;
-    letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-mute);
-    margin-bottom:7px;
-  }
-  .tel-v{
-    font-family:var(--mono);font-size:15px;font-weight:700;
-    font-variant-numeric:tabular-nums;color:var(--ink-dim);
-    line-height:1;margin-bottom:7px;transition:color .3s;
-  }
-  .tel-bar{height:3px;border-radius:2px;background:var(--line);overflow:hidden;}
-  .tel-fill{
-    height:100%;width:0%;border-radius:2px;background:var(--ink-mute);
-    transition:width .28s ease,background .3s;
-  }
-  .tel[data-t="good"] .tel-v{color:var(--mint);}
-  .tel[data-t="good"] .tel-fill{background:var(--mint);}
-  .tel[data-t="fair"] .tel-v{color:var(--amber);}
-  .tel[data-t="fair"] .tel-fill{background:var(--amber);}
-  .tel[data-t="poor"] .tel-v{color:var(--rose);}
-  .tel[data-t="poor"] .tel-fill{background:var(--rose);}
-
-  /* ── link status line (IDs preserved for the WebRTC code) ── */
-  #status{
-    width:100%;max-width:560px;margin-top:14px;
-    display:flex;align-items:center;gap:9px;
-    padding:11px 14px;
-    background:var(--panel);border:1px solid var(--line);border-radius:10px;
-    font-family:var(--mono);font-size:11px;font-weight:500;
-    letter-spacing:.9px;text-transform:uppercase;color:var(--ink-dim);
-  }
-  .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
-  .dot.live{background:var(--mint);box-shadow:0 0 9px var(--mint);animation:pulse 2s infinite;}
-  .dot.off{background:var(--rose);box-shadow:0 0 9px rgba(255,90,90,.5);}
-  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
-
-  .engine{
-    width:100%;max-width:560px;margin-top:10px;
-    font-family:var(--mono);font-size:9.5px;letter-spacing:1.1px;
-    text-transform:uppercase;color:var(--ink-mute);text-align:right;
-  }
-
-  /* ── verification readout (Faza 2: live backend verdict) ── */
-  .verify{
-    width:100%;max-width:560px;margin-top:14px;
-    background:var(--panel);border:1px solid var(--line);
-    border-radius:12px;overflow:hidden;
-  }
-  .vf-row{display:grid;grid-template-columns:1.1fr .9fr 1.4fr;}
-  .vf-cell{padding:12px 10px 11px;text-align:center;border-right:1px solid var(--line-soft);}
-  .vf-cell:last-child{border-right:none;}
-  .vf-k{
-    font-family:var(--mono);font-size:9px;font-weight:500;
-    letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-mute);
-    margin-bottom:7px;
-  }
-  .vf-v{
-    font-family:var(--mono);font-size:15px;font-weight:700;
-    font-variant-numeric:tabular-nums;color:var(--ink-dim);
-    line-height:1;transition:color .3s;
-  }
-  .verify[data-band="trusted"]    .vf-v{color:var(--mint);}
-  .verify[data-band="suspicious"] .vf-v{color:var(--amber);}
-  .verify[data-band="fraud"]      .vf-v{color:var(--rose);}
-  .vf-trustbar{height:3px;border-radius:2px;background:var(--line);overflow:hidden;margin-top:7px;}
-  .vf-trustfill{
-    height:100%;width:0%;border-radius:2px;background:var(--ink-mute);
-    transition:width .4s ease,background .3s;
-  }
-  .verify[data-band="trusted"]    .vf-trustfill{background:var(--mint);}
-  .verify[data-band="suspicious"] .vf-trustfill{background:var(--amber);}
-  .verify[data-band="fraud"]      .vf-trustfill{background:var(--rose);}
-
-  .vf-challenge{
-    display:flex;align-items:center;gap:10px;
-    padding:10px 14px;border-top:1px solid var(--line-soft);
-    font-family:var(--mono);font-size:11px;letter-spacing:.8px;
-    text-transform:uppercase;
-  }
-  .vf-challenge[hidden]{display:none;}
-  .vf-ch-label{color:var(--ink-mute);font-size:9px;letter-spacing:1.4px;}
-  .vf-ch-text{color:var(--indigo);font-weight:700;flex:1;}
-  .vf-ch-text.pass{color:var(--mint);}
-  .vf-ch-text.fail{color:var(--rose);}
-  .vf-ch-timer{
-    color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums;
-    padding:2px 8px;border:1px solid var(--line);border-radius:6px;
-  }
-  .vf-reason{
-    padding:9px 14px;border-top:1px solid var(--line-soft);
-    font-family:var(--mono);font-size:10px;letter-spacing:.6px;
-    text-transform:uppercase;color:var(--rose);
-  }
-  .vf-reason[hidden]{display:none;}
-
-  @media (max-width:560px){
-    .head h1{font-size:20px;}
-    .telemetry{grid-template-columns:repeat(2,1fr);}
-    .tel:nth-child(2){border-right:none;}
-    .tel:nth-child(1),.tel:nth-child(2){border-bottom:1px solid var(--line-soft);}
-  }
-
-  @media (prefers-reduced-motion:reduce){
-    *{animation:none!important;transition:none!important;}
-  }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trust Score Dashboard - Live Verification</title>
+    <meta name="description" content="Real-time AI trust score verification dashboard.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary:#f0f2f7;--bg-card:#ffffff;--bg-tertiary:#eef0f6;
+            --text-primary:#13151a;--text-secondary:#4a5066;--text-muted:#8891aa;
+            --border:#dde1ef;--border-light:#eaedf7;
+            --accent:#4f6ef7;--accent-light:rgba(79,110,247,0.1);
+            --shadow-sm:0 1px 3px rgba(30,40,80,0.07),0 1px 2px rgba(30,40,80,0.05);
+            --shadow:0 4px 16px rgba(30,40,80,0.08),0 1px 4px rgba(30,40,80,0.06);
+            --shadow-hover:0 8px 24px rgba(30,40,80,0.13),0 2px 8px rgba(30,40,80,0.08);
+            --radius:16px;--radius-sm:10px;--radius-xs:6px;
+            --success:#18b96b;--success-bg:rgba(24,185,107,0.1);
+            --warning:#f59e0b;--warning-bg:rgba(245,158,11,0.1);
+            --danger:#ef4444;--danger-bg:rgba(239,68,68,0.1);
+            --video-bg:#090d1a;--header-glass:rgba(255,255,255,0.88);
+        }
+        [data-theme="dark"] {
+            --bg-primary:#0b0f1a;--bg-card:#151d2e;--bg-tertiary:#1a2236;
+            --text-primary:#e8edf8;--text-secondary:#8fa0c0;--text-muted:#56678a;
+            --border:#1e2d47;--border-light:#182035;
+            --accent:#6b8aff;--accent-light:rgba(107,138,255,0.12);
+            --shadow-sm:0 1px 3px rgba(0,0,0,0.4);
+            --shadow:0 4px 16px rgba(0,0,0,0.35),0 1px 4px rgba(0,0,0,0.3);
+            --shadow-hover:0 8px 32px rgba(0,0,0,0.5);
+            --video-bg:#04070f;--header-glass:rgba(11,15,26,0.92);
+            --success:#22c97a;--success-bg:rgba(34,201,122,0.12);
+            --warning:#f6c842;--warning-bg:rgba(246,200,66,0.12);
+            --danger:#ff5a5a;--danger-bg:rgba(255,90,90,0.12);
+        }
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg-primary);color:var(--text-primary);min-height:100vh;transition:background .35s,color .35s;}
+        .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
+        button:focus-visible,.ring-label:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+        .header{display:flex;justify-content:space-between;align-items:center;padding:14px 28px;background:var(--header-glass);backdrop-filter:blur(16px);border-bottom:1px solid var(--border-light);position:sticky;top:0;z-index:200;}
+        .header-left{display:flex;align-items:center;gap:14px;}
+        .live-dot{width:10px;height:10px;background:var(--success);border-radius:50%;box-shadow:0 0 0 3px var(--success-bg),0 0 12px var(--success);animation:livePulse 2s infinite;flex-shrink:0;}
+        @keyframes livePulse{0%,100%{box-shadow:0 0 0 3px var(--success-bg),0 0 12px var(--success);}50%{box-shadow:0 0 0 6px var(--success-bg),0 0 18px var(--success);}}
+        .header h1{font-size:17px;font-weight:700;letter-spacing:-0.3px;}
+        .header-subtitle{font-size:12px;color:var(--text-muted);}
+        .controls{display:flex;gap:8px;align-items:center;}
+        .ctrl-group{display:flex;gap:2px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;}
+        .toggle-btn{padding:7px 16px;border:none;background:transparent;color:var(--text-secondary);border-radius:7px;cursor:pointer;font-size:13px;font-weight:600;font-family:'Inter',sans-serif;transition:all .2s;}
+        .toggle-btn:hover{color:var(--text-primary);background:var(--bg-card);}
+        .toggle-btn.active{background:var(--bg-card);color:var(--accent);box-shadow:var(--shadow-sm);}
+        .theme-btn{padding:8px 14px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);border-radius:var(--radius-sm);cursor:pointer;font-size:13px;font-weight:600;font-family:'Inter',sans-serif;transition:all .2s;}
+        .theme-btn:hover{border-color:var(--accent);color:var(--accent);}
+        .session-badge{padding:6px 12px;background:var(--accent-light);color:var(--accent);border-radius:var(--radius-sm);font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
+        .device-indicator{position:fixed;bottom:20px;right:20px;padding:8px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:20px;font-size:11px;font-weight:600;color:var(--text-muted);box-shadow:var(--shadow);z-index:300;}
+        .container{max-width:1680px;margin:0 auto;padding:24px 28px;}
+        .layout-split{display:grid;grid-template-columns:1fr 440px;gap:24px;align-items:start;}
+        .layout-stacked .layout-split{grid-template-columns:1fr;}
+        .layout-stacked .video-panel{aspect-ratio:16/7;max-height:380px;}
+        .layout-stacked .scores-grid{grid-template-columns:repeat(5,1fr);}
+        .layout-stacked .panel-injection{grid-column:span 1;}
+        .layout-stacked .scores-column{display:grid;grid-template-columns:360px 1fr;gap:20px;align-items:start;}
+        .video-panel{background:var(--video-bg);border-radius:var(--radius);overflow:hidden;position:relative;box-shadow:var(--shadow);transition:box-shadow .3s;aspect-ratio:4/3;animation:slideUp .4s ease backwards;}
+        .video-panel:hover{box-shadow:var(--shadow-hover);}
+        .video-el{width:100%;height:100%;object-fit:cover;display:block;background:var(--video-bg);}
+        .video-placeholder{position:absolute;inset:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,.35);gap:14px;background:radial-gradient(ellipse at center,rgba(79,110,247,.06) 0%,transparent 70%);}
+        .video-panel.stream-active .video-placeholder{display:none;}
+        .video-panel:not(.stream-active) .video-badge{display:none;}
+        .video-icon-ring{width:72px;height:72px;border:2px solid rgba(255,255,255,.12);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:30px;}
+        .video-label-main{font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.3);text-align:center;padding:0 16px;}
+        .video-badge{position:absolute;top:16px;left:16px;background:rgba(239,68,68,.92);color:white;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:1px;display:flex;align-items:center;gap:6px;animation:badgePulse 2s infinite;}
+        .video-badge .dot{width:6px;height:6px;background:white;border-radius:50%;}
+        @keyframes badgePulse{0%,100%{opacity:1;}50%{opacity:.65;}}
+        .video-meta{position:absolute;bottom:16px;right:16px;display:flex;gap:6px;}
+        .meta-pill{background:rgba(0,0,0,.55);backdrop-filter:blur(8px);color:rgba(255,255,255,.85);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;}
+        .video-timer{position:absolute;bottom:16px;left:16px;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);color:rgba(255,255,255,.75);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;}
+        .pip-window{position:absolute;bottom:56px;right:16px;width:200px;aspect-ratio:4/3;background:#060a14;border-radius:10px;border:2px solid rgba(255,255,255,.18);overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.6);cursor:move;z-index:50;transition:border-color .2s,box-shadow .2s;user-select:none;touch-action:none;}
+        .pip-window:hover{border-color:rgba(107,138,255,.6);}
+        .pip-video{width:100%;height:100%;object-fit:cover;display:block;}
+        .pip-inner{position:absolute;inset:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:radial-gradient(ellipse at center,rgba(79,110,247,.08) 0%,transparent 70%);}
+        .pip-window.stream-active .pip-inner{display:none;}
+        .pip-icon{font-size:18px;opacity:.5;}
+        .pip-label{font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.3);}
+        .pip-header-bar{position:absolute;top:0;left:0;right:0;padding:5px 8px;background:linear-gradient(to bottom,rgba(0,0,0,.6) 0%,transparent 100%);display:flex;justify-content:space-between;align-items:center;z-index:2;}
+        .pip-title{font-size:9px;font-weight:700;letter-spacing:1px;color:rgba(255,255,255,.5);text-transform:uppercase;}
+        .pip-close{width:16px;height:16px;background:rgba(255,255,255,.12);border:none;border-radius:50%;color:rgba(255,255,255,.6);font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s;}
+        .pip-close:hover{background:rgba(239,68,68,.5);color:white;}
+        .pip-toggle-btn{position:absolute;top:16px;right:16px;padding:5px 10px;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.15);border-radius:6px;color:rgba(255,255,255,.7);font-size:10px;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;transition:all .2s;z-index:10;}
+        .pip-toggle-btn:hover{background:rgba(79,110,247,.5);border-color:rgba(107,138,255,.5);color:white;}
+        .pip-restore-btn{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);padding:3px 8px;background:rgba(79,110,247,.25);border:none;border-radius:4px;color:rgba(255,255,255,.6);font-size:8px;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;text-transform:uppercase;z-index:3;transition:all .2s;}
+        .pip-restore-btn:hover{background:rgba(79,110,247,.5);color:white;}
+        .pip-window.pip-hidden{display:none;}
+        .scores-column{display:flex;flex-direction:column;gap:20px;}
+        .trust-score-band{background:var(--bg-card);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);border:1px solid var(--border-light);transition:all .35s;animation:slideUp .4s ease .02s backwards;}
+        .trust-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;}
+        .trust-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-muted);}
+        .trust-status{padding:5px 14px;border-radius:20px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;transition:all .4s;}
+        .status-trusted{background:var(--success-bg);color:var(--success);}
+        .status-suspicious{background:var(--warning-bg);color:var(--warning);}
+        .status-fraud{background:var(--danger-bg);color:var(--danger);}
+        .score-gauge{display:flex;align-items:center;gap:20px;margin-bottom:16px;}
+        .score-ring-container{flex-shrink:0;width:88px;height:88px;position:relative;}
+        .score-ring-container svg{transform:rotate(-90deg);width:88px;height:88px;}
+        .ring-bg{fill:none;stroke:var(--border);stroke-width:7;}
+        .ring-fill{fill:none;stroke-width:7;stroke-linecap:round;stroke-dasharray:226;transition:stroke-dashoffset .8s cubic-bezier(.4,0,.2,1),stroke .4s;}
+        .ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:22px;font-weight:800;line-height:1;transition:color .4s;cursor:pointer;border-radius:50%;}
+        .ring-label small{font-size:9px;font-weight:600;color:var(--text-muted);margin-top:2px;}
+        .score-segments{flex:1;display:flex;flex-direction:column;gap:9px;}
+        .segment-bar{display:flex;align-items:center;gap:10px;}
+        .segment-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;width:68px;text-align:right;color:var(--text-muted);flex-shrink:0;}
+        .segment-track{flex:1;height:7px;background:var(--bg-tertiary);border-radius:4px;overflow:hidden;}
+        .segment-fill{height:100%;border-radius:4px;transition:width .7s cubic-bezier(.4,0,.2,1);}
+        .fill-trusted{background:linear-gradient(90deg,var(--success),#4ade80);}
+        .fill-suspicious{background:linear-gradient(90deg,var(--warning),#fbbf24);}
+        .fill-fraud{background:linear-gradient(90deg,var(--danger),#f87171);}
+        .segment-pct{font-size:10px;font-weight:700;width:28px;text-align:right;color:var(--text-muted);flex-shrink:0;}
+        .trust-gradient-bar{height:10px;border-radius:6px;background:linear-gradient(90deg,var(--danger) 0%,var(--warning) 45%,var(--success) 100%);position:relative;margin-bottom:6px;}
+        .trust-gradient-needle{position:absolute;top:-5px;width:4px;height:20px;background:var(--text-primary);border-radius:2px;transform:translateX(-50%);transition:left .8s cubic-bezier(.4,0,.2,1);box-shadow:0 0 6px rgba(0,0,0,.3);}
+        .trust-bar-labels{display:flex;justify-content:space-between;font-size:9px;font-weight:700;letter-spacing:.5px;color:var(--text-muted);text-transform:uppercase;}
+        .reason-area{background:var(--bg-tertiary);border-radius:var(--radius-sm);padding:13px 16px;border-left:3px solid var(--warning);font-size:12px;color:var(--text-secondary);line-height:1.6;font-style:italic;margin-top:16px;transition:border-color .4s;display:flex;gap:8px;align-items:flex-start;}
+        .reason-icon{font-style:normal;flex-shrink:0;margin-top:1px;}
+        .cycle-btn{margin-top:14px;width:100%;padding:9px;border:1px dashed var(--border);background:transparent;color:var(--text-muted);border-radius:var(--radius-sm);font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;transition:all .2s;}
+        .cycle-btn:hover{border-color:var(--accent);color:var(--accent);}
+        .scores-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+        .score-panel{background:var(--bg-card);border-radius:var(--radius-sm);padding:18px;box-shadow:var(--shadow-sm);border:1px solid var(--border-light);transition:all .25s;cursor:default;animation:slideUp .4s ease backwards;position:relative;overflow:hidden;}
+        .score-panel::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:var(--radius-sm) var(--radius-sm) 0 0;opacity:.7;}
+        .score-panel.panel-good::before{background:linear-gradient(90deg,var(--success),#4ade80);}
+        .score-panel.panel-warn::before{background:linear-gradient(90deg,var(--warning),#fbbf24);}
+        .score-panel.panel-bad::before{background:linear-gradient(90deg,var(--danger),#f87171);}
+        .score-panel.panel-pending::before{background:linear-gradient(90deg,#5a6484,#7c88ab);}
+        .score-panel:hover{box-shadow:var(--shadow-hover);transform:translateY(-2px);border-color:var(--border);}
+        .score-panel-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
+        .score-panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);}
+        .score-chip{padding:3px 8px;border-radius:20px;font-size:9px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;}
+        .chip-good{background:var(--success-bg);color:var(--success);}
+        .chip-warn{background:var(--warning-bg);color:var(--warning);}
+        .chip-bad{background:var(--danger-bg);color:var(--danger);}
+        .chip-pending{background:rgba(124,136,171,0.15);color:#7c88ab;}
+        .score-panel-value{font-size:36px;font-weight:800;line-height:1;letter-spacing:-1px;margin-bottom:10px;}
+        .val-good{color:var(--success);}.val-warn{color:var(--warning);}.val-bad{color:var(--danger);}
+        .score-bar{height:5px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;}
+        .score-bar-fill{height:100%;border-radius:3px;transition:width .6s cubic-bezier(.4,0,.2,1);}
+        .score-panel-footer{margin-top:10px;font-size:11px;color:var(--text-muted);}
+        .panel-injection{grid-column:1/-1;}
+        .injection-detail{margin-top:12px;display:flex;gap:12px;}
+        .injection-stat{flex:1;background:var(--bg-tertiary);border-radius:var(--radius-xs);padding:10px 12px;font-size:11px;}
+        .injection-stat-label{color:var(--text-muted);font-weight:600;margin-bottom:3px;}
+        .injection-stat-value{color:var(--text-primary);font-weight:700;font-size:13px;}
+        @media(max-width:1100px){.layout-split{grid-template-columns:1fr!important;}.video-panel{aspect-ratio:16/9;max-height:360px;}.scores-grid{grid-template-columns:repeat(3,1fr)!important;}.panel-injection{grid-column:span 1!important;}.layout-stacked .scores-column{grid-template-columns:1fr;}}
+        @media(max-width:640px){.container{padding:14px 16px;}.header{padding:12px 16px;flex-wrap:wrap;gap:10px;}.header h1{font-size:15px;}.session-badge{display:none;}.video-panel{aspect-ratio:4/3;max-height:260px;}.scores-grid{grid-template-columns:1fr 1fr!important;}.score-panel-value{font-size:28px;}.pip-window{width:140px;}}
+        @keyframes slideUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+        .score-panel:nth-child(1){animation-delay:.06s;}.score-panel:nth-child(2){animation-delay:.12s;}.score-panel:nth-child(3){animation-delay:.18s;}.score-panel:nth-child(4){animation-delay:.24s;}.score-panel:nth-child(5){animation-delay:.30s;}
+        ::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+        @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;}}
+        /* ── Week 3 Member 4 additions ─────────────────────── */
+        .conflict-alert{display:none;margin-bottom:16px;padding:14px 18px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);border-radius:var(--radius-sm);color:var(--danger);font-size:13px;font-weight:600;animation:slideUp .4s ease .1s backwards;}
+        .conflict-alert.visible{display:flex;align-items:center;gap:10px;}
+        .conflict-alert .conflict-icon{font-size:18px;}
+        .trust-score-band.prominent{padding:28px;}
+        .trust-score-band.prominent .score-ring-container{width:120px;height:120px;}
+        .trust-score-band.prominent .score-ring-container svg{width:120px;height:120px;}
+        .trust-score-band.prominent .ring-label{font-size:28px;}
+        .trust-score-band.prominent .trust-status{font-size:13px;padding:7px 18px;}
+        .trust-score-band.prominent .reason-area{font-size:13px;padding:16px 18px;}
+        .waveform-canvas{width:100%;height:40px;margin-top:8px;border-radius:4px;background:var(--bg-tertiary);}
+        .panel-badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:uppercase;margin-left:6px;vertical-align:middle;}
+        .badge-high{background:var(--success-bg);color:var(--success);}
+        .badge-low{background:var(--warning-bg);color:var(--warning);}
+        .no-face-placeholder{color:var(--text-muted);font-size:12px;font-style:italic;padding:6px 0;}
+        .cascade-tooltip{cursor:help;border-bottom:1px dashed var(--text-muted);}
+    </style>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
+<script>
+// This block sits above <body>, so it MUST wait for DOMContentLoaded -
+// running immediately made every getElementById return null, the first
+// addEventListener threw, and the whole upload UI silently died.
+document.addEventListener('DOMContentLoaded', function(){
+    const dropZone = document.getElementById('uploadDropZone');
+    const fileInput = document.getElementById('uploadFileInput');
+    const fileNameEl = document.getElementById('uploadFileName');
+    const analyzeBtn = document.getElementById('uploadAnalyzeBtn');
+    const resultsEl = document.getElementById('uploadResults');
+    const filmstripEl = document.getElementById('uploadFilmstrip');
+    const bannerEl = document.getElementById('uploadVerdictBanner');
+    const verdictTextEl = document.getElementById('uploadVerdictText');
+    const verdictIconEl = document.getElementById('uploadVerdictIcon');
+    let selectedFile = null;
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = 'var(--accent)'; });
+    dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = 'var(--border)'; });
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'var(--border)';
+        if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files.length) setFile(fileInput.files[0]); });
+
+    function setFile(file) {
+        selectedFile = file;
+        fileNameEl.textContent = file.name;
+        analyzeBtn.disabled = false;
+        analyzeBtn.style.opacity = '1';
+    }
+
+    analyzeBtn.addEventListener('click', async () => {
+        if (!selectedFile) return;
+        analyzeBtn.disabled = true;
+        analyzeBtn.textContent = 'Analyzing...';
+        resultsEl.style.display = 'none';
+
+        const form = new FormData();
+        form.append('media', selectedFile);
+
+        try {
+            const res = await fetch('/analyze-upload', { method: 'POST', body: form });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'analysis failed');
+            renderUploadResults(data);
+        } catch (err) {
+            verdictTextEl.textContent = 'Analysis failed: ' + err.message;
+            bannerEl.style.background = 'var(--danger-bg)';
+            bannerEl.style.color = 'var(--danger)';
+            filmstripEl.innerHTML = '';
+            resultsEl.style.display = 'block';
+        } finally {
+            analyzeBtn.disabled = false;
+            analyzeBtn.textContent = 'Analyze';
+        }
+    });
+
+    function renderUploadResults(data) {
+        filmstripEl.innerHTML = (data.frames || []).map(f => {
+            const border = !f.face_found ? '#5a6484' : (f.deepfake_probability > 0.5 ? 'var(--danger)' : 'var(--success)');
+            const img = f.thumbnail ? '<img src="' + f.thumbnail + '" style="width:72px;height:72px;object-fit:cover;border-radius:6px;display:block;">' : '';
+            return '<div style="border:2px solid ' + border + ';border-radius:8px;flex-shrink:0;">' + img + '</div>';
+        }).join('');
+
+        if (data.verdict === 'NO_FACE') {
+            verdictTextEl.textContent = 'No face detected in uploaded media';
+            bannerEl.style.background = 'var(--bg-tertiary)';
+            bannerEl.style.color = 'var(--text-muted)';
+            verdictIconEl.textContent = '';
+        } else {
+            const isFake = data.verdict === 'FAKE';
+            verdictTextEl.textContent = 'Result: ' + data.verdict + ' (' + data.confidence_pct + '% confidence)';
+            bannerEl.style.background = isFake ? 'var(--danger-bg)' : 'var(--success-bg)';
+            bannerEl.style.color = isFake ? 'var(--danger)' : 'var(--success)';
+            verdictIconEl.textContent = isFake ? '👎' : '👍';
+        }
+
+        // ── Faza 3: full-pipeline detail line (trust, audio, continuity) ──
+        let detailEl = document.getElementById('uploadPipelineDetail');
+        if (!detailEl) {
+            detailEl = document.createElement('div');
+            detailEl.id = 'uploadPipelineDetail';
+            detailEl.style.cssText =
+                'margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.7;';
+            bannerEl.parentNode.insertBefore(detailEl, bannerEl.nextSibling);
+        }
+        const p = data.full_pipeline;
+        if (p && p.trust_score !== undefined) {
+            const s = p.signals || {};
+            const parts = ['Trust: ' + p.trust_score + ' (' + p.trust_band + ')'];
+            if (s.audio_spoof_probability !== null && s.audio_spoof_probability !== undefined) {
+                parts.push('Audio spoof: ' + Math.round(s.audio_spoof_probability * 100) + '%');
+            } else {
+                parts.push('Audio: ' + (p.audio_note || 'n/a'));
+            }
+            if (s.identity_continuity_min !== null && s.identity_continuity_min !== undefined) {
+                parts.push('Identity continuity: ' + Math.round(s.identity_continuity_min * 100) + '% min');
+            }
+            if (s.spoof_frame_ratio !== undefined && s.spoof_frame_ratio !== null) {
+                parts.push('Spoof frames: ' + Math.round(s.spoof_frame_ratio * 100) + '%');
+            }
+            if (p.hard_deny_reasons && p.hard_deny_reasons.length) {
+                parts.push('DENY: ' + p.hard_deny_reasons.join(', ').replace(/_/g, ' '));
+            }
+            detailEl.textContent = parts.join('  ·  ');
+            detailEl.style.display = 'block';
+        } else if (detailEl) {
+            detailEl.style.display = 'none';
+        }
+        resultsEl.style.display = 'block';
+    }
+});
+</script>
 <body>
-
-<!-- ═══ Consent modal — same contract, restyled to match ═══ -->
+<!-- ===== Consent Acknowledgment Modal (Day 2) ===== -->
 <div id="consentOverlay" role="dialog" aria-modal="true" aria-labelledby="consentTitle" style="
-  position:fixed;inset:0;z-index:9999;background:rgba(4,7,15,.97);
-  display:flex;align-items:center;justify-content:center;padding:24px;
-  backdrop-filter:blur(6px);">
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(6, 8, 14, 0.97);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; box-sizing: border-box;
+  font-family: sans-serif;
+">
   <div id="consentBox" style="
-    max-width:560px;width:100%;background:var(--panel);
-    border:1px solid var(--line);border-radius:14px;padding:30px;
-    box-shadow:0 24px 70px rgba(0,0,0,.6);">
-
-    <div style="display:flex;align-items:center;gap:9px;margin-bottom:18px;">
-      <span style="width:9px;height:9px;border-radius:2px;background:var(--indigo);box-shadow:0 0 10px var(--indigo);"></span>
-      <span style="font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:2.2px;text-transform:uppercase;color:var(--ink-mute);">Consent Required</span>
-    </div>
-
-    <h2 id="consentTitle" style="margin:0 0 18px;font-size:21px;font-weight:800;letter-spacing:-.4px;">Identity verification</h2>
+    max-width: 560px; width: 100%;
+    background: #12172a; border: 1px solid #232b45; border-radius: 12px;
+    padding: 32px; color: #e8edf8; box-sizing: border-box;
+  ">
+    <h2 id="consentTitle" style="margin: 0 0 16px; font-size: 20px;">Verifier Acknowledgment Required</h2>
 
     <div id="consentStateInitial">
-      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);margin-bottom:12px;"><strong style="color:var(--ink);">What we collect:</strong><br>
-      &bull; A mathematical face embedding (not a photo)<br>
-      &bull; A voice embedding (not a recording)<br>
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;">
+        You are about to view a live biometric verification session. The participant's
+        video is processed into a face embedding, and their audio into a voice
+        embedding, for identity and deepfake-detection purposes only.
+      </p>
+
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>What this session involves:</strong><br>
+      &bull; A mathematical face embedding of the participant (not a photo)<br>
+      &bull; A voice embedding of the participant (not a recording)<br>
       &bull; Video stream metadata for liveness verification</p>
 
-      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);margin-bottom:12px;"><strong style="color:var(--ink);">Why:</strong> To verify your identity and detect deepfake impersonation in real time.</p>
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>How long data is kept:</strong> The participant's one-time enrollment face embedding is saved to disk so they don't have to re-enroll every session. Everything else in this session — live embeddings and metadata — is session-only and discarded when it ends. Nothing else is written to disk or sent to a server.</p>
 
-      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);margin-bottom:12px;"><strong style="color:var(--ink);">How long we keep it:</strong> Your one-time enrollment face embedding is saved to disk so you don't have to re-enroll every session. Everything else — live video/audio embeddings and session metadata — is session-only and discarded when the session ends. Nothing else is written to disk or sent to a server.</p>
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;"><strong>Your responsibility as verifier:</strong><br>
+      &bull; Use this session only for its stated identity-verification purpose.<br>
+      &bull; End the session promptly once verification is complete.</p>
 
-      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);"><strong style="color:var(--ink);">Your rights:</strong><br>
-      &bull; You may withdraw consent at any time by ending the session.<br>
-      &bull; You may request deletion of any in-session data (deleted automatically when the session ends).<br>
-      &bull; You may also request deletion of your persisted enrollment embedding at any time — this requires a manual step, since it's designed to persist across sessions.</p>
-
-      <div style="background:var(--indigo-dim);border-left:2px solid var(--indigo);padding:13px 14px;margin:18px 0;font-size:12.5px;line-height:1.6;color:var(--ink-dim);border-radius:0 8px 8px 0;">
-        <strong style="color:var(--ink);">BIOMETRIC DATA NOTICE:</strong> We are collecting biometric identifiers (a persisted enrollment face embedding, plus in-session face and voice embeddings) to verify your identity and detect deepfake impersonation. The enrollment embedding is kept on disk until you delete it or re-enroll. All other session data is retained only for the duration of this session and deleted when it ends. You may withdraw consent at any time by ending the session, and may request deletion of your stored enrollment embedding at any time.
+      <div style="background: #1c2340; border-left: 3px solid #4f6bff; padding: 12px 14px; margin: 16px 0; font-size: 13px; line-height: 1.5; color: #c9d2ea;">
+        <strong>BIOMETRIC DATA NOTICE:</strong> This session involves biometric identifiers belonging to another individual — a persisted enrollment face embedding, plus in-session face and voice embeddings — collected to verify their identity and detect deepfake impersonation. The enrollment embedding is kept on disk until the participant deletes it or re-enrolls. All other session data is retained only for the duration of this session and deleted when it ends.
       </div>
 
-      <p style="font-size:11.5px;color:var(--ink-mute);">
-        <a href="./privacy-notice.html" target="_blank" rel="noopener" style="color:var(--indigo);">Full Privacy Notice</a> &middot; Your Rights
+      <p style="font-size: 12px; color: #7c88ab;">
+        <a href="./privacy-notice.html" target="_blank" rel="noopener" style="color: #8fa8ff;">Full Privacy Notice</a> &middot; Your Rights
       </p>
 
-      <div style="display:flex;gap:10px;margin-top:22px;">
+      <div style="display: flex; gap: 12px; margin-top: 20px;">
         <button id="consentBtn" style="
-          flex:1;padding:13px 16px;border:none;border-radius:9px;
-          background:var(--indigo);color:#08111f;font-family:var(--sans);
-          font-size:13.5px;font-weight:700;cursor:pointer;">Start verification</button>
+          flex: 1; padding: 12px 16px; border: none; border-radius: 8px;
+          background: #4f6bff; color: white; font-size: 14px; font-weight: 600;
+          cursor: pointer;
+        ">I acknowledge and agree to proceed</button>
         <button id="declineBtn" style="
-          padding:13px 18px;border:1px solid var(--line);border-radius:9px;
-          background:transparent;color:var(--ink-dim);font-family:var(--sans);
-          font-size:13.5px;font-weight:600;cursor:pointer;">Decline</button>
+          padding: 12px 16px; border: 1px solid #3a4468; border-radius: 8px;
+          background: transparent; color: #b7c0d8; font-size: 14px;
+          cursor: pointer;
+        ">Decline</button>
       </div>
     </div>
 
-    <div id="consentStateInitializing" style="display:none;text-align:center;padding:22px 0;">
-      <div style="width:28px;height:28px;border:2px solid var(--line);border-top-color:var(--indigo);border-radius:50%;margin:0 auto 16px;animation:consentSpin .8s linear infinite;"></div>
-      <p id="consentInitializingText" style="font-family:var(--mono);font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-dim);">Initializing camera</p>
+    <div id="consentStateInitializing" style="display: none; text-align: center; padding: 20px 0;">
+      <div style="width: 28px; height: 28px; border: 3px solid #2a3358; border-top-color: #4f6bff; border-radius: 50%; margin: 0 auto 16px; animation: consentSpin 0.8s linear infinite;"></div>
+      <p style="font-size: 14px; color: #b7c0d8;">Connecting to session&hellip;</p>
     </div>
 
-    <div id="consentStateError" style="display:none;">
-      <p style="font-size:13.5px;line-height:1.6;color:var(--rose);">Camera access is blocked. Enable camera and microphone permissions for this site, then try again.</p>
+    <div id="consentStateError" style="display: none;">
+      <p style="font-size: 14px; line-height: 1.5; color: #f2b8b8;">Unable to start the session. Please refresh and try again.</p>
       <button id="consentRetryBtn" style="
-        margin-top:16px;padding:13px 18px;border:none;border-radius:9px;
-        background:var(--indigo);color:#08111f;font-family:var(--sans);
-        font-size:13.5px;font-weight:700;cursor:pointer;">Try again</button>
+        margin-top: 12px; padding: 12px 16px; border: none; border-radius: 8px;
+        background: #4f6bff; color: white; font-size: 14px; font-weight: 600; cursor: pointer;
+      ">Retry</button>
     </div>
 
-    <div id="consentStateDecline" style="display:none;">
-      <p style="font-size:15px;font-weight:700;margin-bottom:8px;">Verification is required to continue.</p>
-      <p style="font-size:13.5px;line-height:1.6;color:var(--ink-dim);">
-        This session needs camera and microphone access to confirm your identity and detect deepfake attempts in real time.
+    <div id="consentStateDecline" style="display: none;">
+      <p style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">Acknowledgment required to proceed.</p>
+      <p style="font-size: 14px; line-height: 1.5; color: #b7c0d8;">
+        Viewing this verification session requires acknowledging how the participant's
+        biometric data is used. Without acknowledgment, you cannot continue.
       </p>
       <button id="consentBackBtn" style="
-        margin-top:18px;padding:13px 18px;border:1px solid var(--line);border-radius:9px;
-        background:transparent;color:var(--ink);font-family:var(--sans);
-        font-size:13.5px;font-weight:600;cursor:pointer;">Back</button>
+        margin-top: 16px; padding: 12px 16px; border: 1px solid #3a4468; border-radius: 8px;
+        background: transparent; color: #e8edf8; font-size: 14px; cursor: pointer;
+      ">Back</button>
     </div>
   </div>
 </div>
 
 <style>
-  @keyframes consentSpin{to{transform:rotate(360deg);}}
-  body.consent-pending{overflow:hidden;}
+  @keyframes consentSpin { to { transform: rotate(360deg); } }
+  body.consent-pending { overflow: hidden; }
 </style>
 
 <script>
-/* Consent logic — behaviour unchanged from the original file. */
 (function(){
   window.consentGranted = false;
 
-  var overlay   = document.getElementById('consentOverlay');
-  var stInitial = document.getElementById('consentStateInitial');
-  var stInit    = document.getElementById('consentStateInitializing');
-  var stError   = document.getElementById('consentStateError');
-  var stDecline = document.getElementById('consentStateDecline');
-  var consentBtn= document.getElementById('consentBtn');
-  var declineBtn= document.getElementById('declineBtn');
-  var backBtn   = document.getElementById('consentBackBtn');
-  var retryBtn  = document.getElementById('consentRetryBtn');
+  var overlay      = document.getElementById('consentOverlay');
+  var stInitial     = document.getElementById('consentStateInitial');
+  var stInit        = document.getElementById('consentStateInitializing');
+  var stError       = document.getElementById('consentStateError');
+  var stDecline     = document.getElementById('consentStateDecline');
+  var consentBtn    = document.getElementById('consentBtn');
+  var declineBtn    = document.getElementById('declineBtn');
+  var backBtn       = document.getElementById('consentBackBtn');
+  var retryBtn      = document.getElementById('consentRetryBtn');
 
   var resolveConsent = null;
   var focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -368,12 +400,16 @@
   function trapFocus(e){
     if (overlay.style.display === 'none') return;
     if (e.key !== 'Tab') return;
-    var f = overlay.querySelectorAll(focusableSelector);
-    if (!f.length) return;
-    var first = f[0], last = f[f.length - 1];
-    if (e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+    var focusables = overlay.querySelectorAll(focusableSelector);
+    if (!focusables.length) return;
+    var first = focusables[0], last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
   }
+
   document.addEventListener('keydown', trapFocus);
 
   function closeOverlay(){
@@ -395,13 +431,18 @@
     consentBtn.disabled = true;
     declineBtn.disabled = true;
     showState(stInit);
+
     await new Promise(function(r){ requestAnimationFrame(function(){ requestAnimationFrame(r); }); });
+
     window.consentGranted = true;
     closeOverlay();
     if (resolveConsent) resolveConsent(true);
   });
 
-  declineBtn.addEventListener('click', function(){ showState(stDecline); backBtn.focus(); });
+  declineBtn.addEventListener('click', function(){
+    showState(stDecline);
+    backBtn.focus();
+  });
 
   backBtn.addEventListener('click', function(){
     consentBtn.disabled = false;
@@ -423,756 +464,1156 @@
   });
 })();
 </script>
-<!-- ═══ End consent modal ═══ -->
+<!-- ===== End Consent Modal ===== -->
 
-
-<div class="rail">
-  <div class="brand">
-    <span class="brand-mark"></span>
-    <span class="brand-name">DeepfakeGuard</span>
-  </div>
-  <span class="rail-session" id="railSession">Room · demo-room</span>
-</div>
-
-<div class="head">
-  <h1>Hold still while we capture your face</h1>
-  <p>Look straight at the camera. We check framing, lighting and sharpness before sending anything to the verifier.</p>
-</div>
-
-<!--
-  This device captures camera/mic and SENDS the stream to the verifier
-  (index.html) over WebRTC. The preview below is a purely local mirror of
-  the participant's own camera (srcObject = own stream) — it is NOT the
-  verifier's view and adds no network traffic. The HUD canvas drawn on top
-  runs entirely in this browser and sends nothing anywhere.
--->
-<div class="stage" id="stage">
-  <div class="mirror">
-    <video id="localPreview" autoplay playsinline muted></video>
-    <canvas id="hud"></canvas>
-  </div>
-
-  <div class="chip chip-state" id="chipState" data-s="idle">
-    <span class="pip"></span><span id="chipStateText">Searching</span>
-  </div>
-  <div class="chip chip-pct" id="chipPct">
-    <b id="pctVal">0</b><span>% captured</span>
-  </div>
-  <div class="guide" id="guide" data-tone="warn">Position your face in the frame</div>
-</div>
-
-<div class="telemetry" id="telemetry">
-  <div class="tel" id="telFraming" data-t="">
-    <div class="tel-k">Framing</div>
-    <div class="tel-v" id="vFraming">—</div>
-    <div class="tel-bar"><div class="tel-fill" id="fFraming"></div></div>
-  </div>
-  <div class="tel" id="telLight" data-t="">
-    <div class="tel-k">Light</div>
-    <div class="tel-v" id="vLight">—</div>
-    <div class="tel-bar"><div class="tel-fill" id="fLight"></div></div>
-  </div>
-  <div class="tel" id="telSharp" data-t="">
-    <div class="tel-k">Sharpness</div>
-    <div class="tel-v" id="vSharp">—</div>
-    <div class="tel-bar"><div class="tel-fill" id="fSharp"></div></div>
-  </div>
-  <div class="tel" id="telStable" data-t="">
-    <div class="tel-k">Stability</div>
-    <div class="tel-v" id="vStable">—</div>
-    <div class="tel-bar"><div class="tel-fill" id="fStable"></div></div>
-  </div>
-</div>
-
-<!-- Faza 2: live verification readout — fed by 'verdict_update' from the
-     backend AnalysisEngine. Same ledger styling as the telemetry strip. -->
-<div class="verify" id="verifyPanel" data-band="">
-  <div class="vf-row">
-    <div class="vf-cell">
-      <div class="vf-k">Trust</div>
-      <div class="vf-v" id="vfTrust">&mdash;</div>
-      <div class="vf-trustbar"><div class="vf-trustfill" id="vfTrustFill"></div></div>
+<div id="srStatus" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+<header class="header">
+    <div class="header-left">
+        <div class="live-dot" aria-hidden="true"></div>
+        <div>
+            <h1>Live Verification Session</h1>
+            <div class="header-subtitle"><span id="sessionIdText">Session ID: pending</span> &middot; Agent Trust Analysis</div>
+        </div>
     </div>
-    <div class="vf-cell">
-      <div class="vf-k">Band</div>
-      <div class="vf-v" id="vfBand">&mdash;</div>
+    <div class="controls">
+        <div class="ctrl-group" role="group" aria-label="Layout">
+            <button class="toggle-btn active" id="btnSplit" aria-pressed="true" onclick="setLayout('split')">Video Left</button>
+            <button class="toggle-btn" id="btnStack" aria-pressed="false" onclick="setLayout('stack')">Video Top</button>
+        </div>
+        <button class="theme-btn" id="btnTheme" aria-pressed="false" onclick="toggleTheme()">&#x1F319; Dark</button>
+        <span class="session-badge">&#x25CF; Live</span>
     </div>
-    <div class="vf-cell">
-      <div class="vf-k">Verdict</div>
-      <div class="vf-v" id="vfVerdict">Awaiting</div>
+</header>
+<main class="container" id="mainContainer">
+    <h2 class="sr-only">Live verification dashboard</h2>
+    <!-- ===== Conflict Alert Banner (Week 3 Day 4) ===== -->
+    <div id="conflictAlert" class="conflict-alert">
+        <span class="conflict-icon">&#x1F6A8;</span>
+        <span id="conflictText">Conflicting signals detected</span>
     </div>
-  </div>
-  <div class="vf-challenge" id="vfChallenge" hidden>
-    <span class="vf-ch-label">Liveness</span>
-    <span class="vf-ch-text" id="vfChallengeText">&mdash;</span>
-    <span class="vf-ch-timer" id="vfChallengeTimer">&mdash;</span>
-  </div>
-  <div class="vf-reason" id="vfReason" hidden></div>
+    <div class="layout-split" id="layoutWrapper">
+        <div class="video-panel" id="videoPanel">
+            <video class="video-el" id="remoteVideo" autoplay playsinline></video>
+            <div class="video-placeholder">
+                <div class="video-icon-ring" aria-hidden="true">&#x1F4F9;</div>
+                <div class="video-label-main">Waiting for participant stream&hellip;</div>
+            </div>
+            <div class="video-badge"><span class="dot" aria-hidden="true"></span> LIVE</div>
+            <button class="pip-toggle-btn" id="pipToggleBtn" aria-label="Toggle picture-in-picture window" onclick="togglePip()">&#x229E; PiP</button>
+            <div class="pip-window" id="pipWindow">
+                <video class="pip-video" id="pipVideo" autoplay playsinline></video>
+                <div class="pip-header-bar">
+                    <span class="pip-title" id="pipTitle">Top View</span>
+                    <button class="pip-close" aria-label="Close picture-in-picture window" onclick="togglePip()">&#x2715;</button>
+                </div>
+                <div class="pip-inner">
+                    <div class="pip-icon" id="pipIcon" aria-hidden="true">&#x1F3A5;</div>
+                    <div class="pip-label" id="pipViewLabel">Alt Feed</div>
+                </div>
+                <button class="pip-restore-btn" onclick="swapToLayout()">Switch View</button>
+            </div>
+            <div class="video-timer" id="sessionTimer">00:00</div>
+            <div class="video-meta">
+                <span class="meta-pill">720p</span>
+                <span class="meta-pill">30 fps</span>
+            </div>
+        </div>
+        <div class="scores-column">
+            <div class="trust-score-band prominent">
+                <div class="trust-header">
+                    <h2 class="trust-title">Overall Trust Score</h2>
+                    <span class="trust-status" id="trustStatus" style="background:rgba(124,136,171,0.15);color:#7c88ab;">Awaiting</span>
+                </div>
+                <div class="score-gauge">
+                    <div class="score-ring-container">
+                        <svg viewBox="0 0 88 88" role="img" aria-hidden="true">
+                            <circle class="ring-bg" cx="44" cy="44" r="36"/>
+                            <circle class="ring-fill" cx="44" cy="44" r="36" id="ringFill" stroke="#7c88ab" style="stroke-dashoffset:226"/>
+                        </svg>
+                        <div class="ring-label" id="ringLabel" aria-hidden="true">
+                            <span id="trustScore">&mdash;</span>
+                            <small>/100</small>
+                        </div>
+                    </div>
+                    <div class="score-segments">
+                        <div class="segment-bar">
+                            <span class="segment-label">Trusted</span>
+                            <div class="segment-track"><div class="segment-fill fill-trusted" id="segTrusted" style="width:0%;"></div></div>
+                            <span class="segment-pct" id="pctTrusted">&mdash;</span>
+                        </div>
+                        <div class="segment-bar">
+                            <span class="segment-label">Suspicious</span>
+                            <div class="segment-track"><div class="segment-fill fill-suspicious" id="segSuspicious" style="width:0%;"></div></div>
+                            <span class="segment-pct" id="pctSuspicious">&mdash;</span>
+                        </div>
+                        <div class="segment-bar">
+                            <span class="segment-label">Fraud</span>
+                            <div class="segment-track"><div class="segment-fill fill-fraud" id="segFraud" style="width:0%"></div></div>
+                            <span class="segment-pct" id="pctFraud">&mdash;</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="trust-gradient-bar">
+                    <div class="trust-gradient-needle" id="trustNeedle" style="left:50%"></div>
+                </div>
+                <div class="trust-bar-labels"><span>Fraud</span><span>Suspicious</span><span>Trusted</span></div>
+                <div class="reason-area" id="reasonArea">
+                    <span class="reason-icon" id="reasonIcon" aria-hidden="true">&#x26A0;&#xFE0F;</span>
+                    <span id="reasonText">Awaiting signals &mdash; no modules have reported yet.</span>
+                </div>
+                <button class="cycle-btn" id="cycleBtn">Cycle test scenario &rarr; (showing simulated data)</button>
+		<div style="display:flex; gap:10px; margin-top:10px;">
+    			<button class="cycle-btn" id="attackBtn" style="background:#3a1420; border-color:#7a2a3a; color:#ff8080;">🚨 Simulate Deepfake Attack</button>
+    			<button class="cycle-btn" id="legitBtn" style="background:#14301c; border-color:#2a6a3a; color:#7dffa0;">✅ Simulate Legit User</button>
+		</div>
+            </div>
+            <div class="scores-grid">
+                <div class="score-panel panel-pending">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Identity</h3><span class="score-chip chip-pending" id="chip0">Pending</span></div>
+                    <div class="score-panel-value" id="val0" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar0" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot0">Awaiting identity module&hellip;</div>
+                    <div class="identity-detail" id="identityDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div style="display:flex;justify-content:space-between;color:#8b95b5;">
+                            <span id="identitySimilarity">Similarity: &mdash;</span>
+                            <span id="identityConfidence">&mdash;</span>
+                        </div>
+                        <div id="identityMultiFaceWarning" style="display:none;color:#f2b8b8;margin-top:4px;font-weight:600;">&#9888; Multiple faces detected</div>
+                    </div>
+                </div>
+                <div class="score-panel panel-pending">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Liveness</h3><span class="score-chip chip-pending" id="chip1">Pending</span></div>
+                    <div class="score-panel-value" id="val1" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar1" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot1">Awaiting liveness module&hellip;</div>
+                    <div class="liveness-detail" id="livenessDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div id="livenessPrompt" style="font-weight:600;color:var(--text-primary,#e8edf8);margin-bottom:4px;">Waiting for challenge&hellip;</div>
+                        <div style="display:flex;justify-content:space-between;color:#8b95b5;">
+                            <span id="livenessCountdown">&mdash;</span>
+                            <span id="livenessResponseTime">&mdash;</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-panel panel-pending" id="visualPanel">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Visual deepfake</h3><span class="score-chip chip-pending" id="chip2">Pending</span><span class="panel-badge badge-low" id="visualConfidence" style="display:none;">Low</span></div>
+                    <div class="score-panel-value" id="val2" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar2" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot2">Awaiting visual deepfake module&hellip;</div>
+                    <div class="visual-detail" id="visualDetail" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+                        <div id="visualFaceState" style="color:#8b95b5;">Face detected</div>
+                        <div id="visualCascade" style="color:#5a6484;margin-top:2px;display:none;">Cascade: <span class="cascade-tooltip" title="Average cascade stage (1 = cheap texture check, 2 = full EfficientNet)">1.4</span></div>
+                    </div>
+                </div>
+                <div class="score-panel panel-pending" id="audioPanel">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Audio deepfake</h3><span class="score-chip chip-pending" id="chip3">Pending</span></div>
+                    <div class="score-panel-value" id="val3" style="color:#7c88ab;">—</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar3" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot3" style="display:flex;align-items:center;gap:8px;">
+                        <span class="audio-pending-spinner" id="audioSpinner" style="width:12px;height:12px;border:2px solid #2a3358;border-top-color:#7c88ab;border-radius:50%;display:inline-block;animation:consentSpin 0.9s linear infinite;"></span>
+                        <span id="audioFooterText">Lip-sync module not yet connected</span>
+                    </div>
+                    <canvas class="waveform-canvas" id="audioWaveform" width="200" height="40"></canvas>
+                </div>
+                <div class="score-panel panel-pending panel-injection">
+                    <div class="score-panel-header"><h3 class="score-panel-title">Injection risk</h3><span class="score-chip chip-pending" id="chip4">Pending</span></div>
+                    <div class="score-panel-value" id="val4" style="color:#7c88ab;">&mdash;</div>
+                    <div class="score-bar"><div class="score-bar-fill" id="bar4" style="width:0%;"></div></div>
+                    <div class="score-panel-footer" id="foot4">Awaiting security module&hellip;</div>
+                    <div class="injection-detail">
+                        <div class="injection-stat"><div class="injection-stat-label">Frame timing deviation</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Replay confidence</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
+                        <div class="injection-stat"><div class="injection-stat-label">Signal type</div><div class="injection-stat-value" style="color:var(--text-muted)">&mdash;</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="session-log-panel" style="
+        margin-top: 16px; background: var(--bg-card, #12172a);
+        border-radius: var(--radius-sm, 10px); border: 1px solid var(--border-light, #232b45);
+        padding: 18px; box-shadow: var(--shadow-sm, none);
+    ">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted,#8b95b5);margin:0;">
+                Session Log <span style="font-weight:400;color:#5a6484;">&middot; continuous verification audit trail</span>
+            </h3>
+            <button id="sessionResetBtn" style="
+                font-size: 11px; padding: 6px 12px; border-radius: 6px;
+                border: 1px solid var(--border-light,#3a4468); background: transparent;
+                color: #b7c0d8; cursor: pointer;
+            ">Reset Session</button>
+        </div>
+        <div id="sessionLogList" style="
+            max-height: 220px; overflow-y: auto; font-size: 12px;
+            display: flex; flex-direction: column-reverse; gap: 6px;
+        ">
+            <div style="color:#5a6484;">No events yet — session log will populate as verification signals arrive.</div>
+        </div>
+    </div>
+    <div class="upload-panel" style="
+    margin-top: 16px; background: var(--bg-card); border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light); padding: 18px; box-shadow: var(--shadow-sm);
+">
+    <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);margin:0 0 14px;">
+        Upload &amp; Analyze <span style="font-weight:400;color:#5a6484;">&middot; non-live photo or video check</span>
+    </h3>
+
+    <div id="uploadDropZone" style="border:1px dashed var(--border);border-radius:var(--radius-sm);padding:24px;text-align:center;cursor:pointer;">
+        <input type="file" id="uploadFileInput" accept="image/*,video/*" style="display:none;">
+        <div style="color:var(--text-muted);font-size:13px;">
+            Drop a photo or video here, or <span style="color:var(--accent);font-weight:600;">browse</span>
+        </div>
+        <div id="uploadFileName" style="margin-top:6px;font-size:12px;color:var(--text-secondary);"></div>
+    </div>
+
+    <button id="uploadAnalyzeBtn" disabled style="margin-top:12px;width:100%;padding:10px;border:none;border-radius:var(--radius-sm);background:var(--accent);color:white;font-weight:600;font-size:13px;cursor:pointer;opacity:.5;">Analyze</button>
+
+    <div id="uploadResults" style="margin-top:16px;display:none;">
+        <div id="uploadFilmstrip" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;"></div>
+        <div id="uploadVerdictBanner" style="margin-top:12px;padding:14px 18px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:space-between;font-weight:700;">
+            <span id="uploadVerdictText"></span>
+            <span id="uploadVerdictIcon" style="font-size:20px;"></span>
+        </div>
+    </div>
 </div>
-
-<div id="status">
-  <span class="dot off" id="statusDot"></span><span id="statusText">Connecting…</span>
-</div>
-
-<div class="engine" id="engineLabel">Detector · heuristic</div>
-
-
-<!-- ═══════════════════════════════════════════════════════════
-     Capture HUD engine.
-
-     Runs 100% locally in this browser. It does NOT talk to the backend
-     and does NOT change the WebRTC contract below. It reads pixels from
-     the same <video> element that is already on screen and derives four
-     honest quality signals from them.
-
-     Two detection tiers:
-       1. MediaPipe FaceLandmarker (loaded from CDN, async) — real
-          468-point mesh, real face box.
-       2. Skin-chroma fallback (pure JS, no network) — if the CDN or the
-          model is unavailable, we still find the face region and every
-          quality metric keeps working.
-     ═══════════════════════════════════════════════════════════ -->
+</main>
+<div class="device-indicator" id="deviceIndicator">Viewport &middot; Desktop</div>
 <script>
-(function(){
-  const video  = document.getElementById('localPreview');
-  const hud    = document.getElementById('hud');
-  const ctx    = hud.getContext('2d');
+    var darkMode = false, currentLayout = 'split', pipVisible = true, timerSeconds = 0, scenarioIdx = 1;
 
-  const chipState = document.getElementById('chipState');
-  const chipText  = document.getElementById('chipStateText');
-  const pctVal    = document.getElementById('pctVal');
-  const guide     = document.getElementById('guide');
-  const engineLbl = document.getElementById('engineLabel');
+    function toggleTheme(){
+        darkMode = !darkMode;
+        if (darkMode) { document.body.setAttribute('data-theme', 'dark'); }
+        else { document.body.removeAttribute('data-theme'); }
+        var btn = document.getElementById('btnTheme');
+        btn.textContent = darkMode ? '\u2600\uFE0F Light' : '\uD83C\uDF19 Dark';
+        btn.setAttribute('aria-pressed', String(darkMode));
+    }
 
-  // Offscreen buffer — all pixel maths happens at this small size, so the
-  // whole HUD costs well under a millisecond per frame.
-  const SW = 128, SH = 96;
-  const work = document.createElement('canvas');
-  work.width = SW; work.height = SH;
-  const wctx = work.getContext('2d', { willReadFrequently: true });
+    function resetPipPosition(){
+        var pip = document.getElementById('pipWindow');
+        pip.style.left = '';
+        pip.style.top = '';
+        pip.style.right = '';
+        pip.style.bottom = '';
+    }
 
-  let prevGray = null;
-  let landmarker = null;          // set if MediaPipe loads
-  let mode = 'heuristic';
-
-  // Smoothed state
-  let box = null;                 // {x,y,w,h} in normalised 0..1 coords
-  let smBox = null;
-  let landmarks = null;
-  let capture = 0;                // 0..100
-  let sweep = 0;
-  let fpsT = performance.now(), fpsN = 0, fps = 0;
-  let lastVideoTime = -1;
-  let lastScore = { framing:0, light:0, sharp:0, stable:0, hint:null };
-
-  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
-  const lerp  = (a,b,t)=>a+(b-a)*t;
-  const ema   = (prev,next,a)=> prev===null?next:prev*(1-a)+next*a;
-
-  /* ── metric smoothing ─────────────────────────────────────── */
-  let mLight=null, mSharp=null, mMotion=null;
-
-  /* ── MediaPipe (progressive enhancement) ──────────────────── */
-  window.__onLandmarkerReady = function(lm){
-    landmarker = lm;
-    mode = 'mesh';
-    engineLbl.textContent = 'Detector · face mesh (468 pts)';
-  };
-
-  /* ── skin-chroma fallback detector ────────────────────────── */
-  function detectHeuristic(data){
-    // YCbCr skin gate. Crude but genuinely responsive to a real face.
-    const cols = new Float32Array(SW), rows = new Float32Array(SH);
-    let total = 0;
-    for (let y=0; y<SH; y++){
-      for (let x=0; x<SW; x++){
-        const i = (y*SW + x) * 4;
-        const r = data[i], g = data[i+1], b = data[i+2];
-        const Y  =  0.299*r + 0.587*g + 0.114*b;
-        const Cb = -0.169*r - 0.331*g + 0.500*b + 128;
-        const Cr =  0.500*r - 0.419*g - 0.081*b + 128;
-        if (Y > 45 && Cb >= 77 && Cb <= 130 && Cr >= 133 && Cr <= 175){
-          cols[x]++; rows[y]++; total++;
+    function setLayout(layout){
+        currentLayout = layout;
+        var c = document.getElementById('mainContainer');
+        var btnSplit = document.getElementById('btnSplit');
+        var btnStack = document.getElementById('btnStack');
+        btnSplit.classList.toggle('active', layout === 'split');
+        btnStack.classList.toggle('active', layout === 'stack');
+        btnSplit.setAttribute('aria-pressed', String(layout === 'split'));
+        btnStack.setAttribute('aria-pressed', String(layout === 'stack'));
+        resetPipPosition();
+        if (layout === 'stack') {
+            c.classList.add('layout-stacked');
+            document.getElementById('pipTitle').textContent = 'Left View';
+            document.getElementById('pipViewLabel').textContent = 'Side Feed';
+            document.getElementById('pipIcon').textContent = '\uD83D\uDCFA';
+        } else {
+            c.classList.remove('layout-stacked');
+            document.getElementById('pipTitle').textContent = 'Top View';
+            document.getElementById('pipViewLabel').textContent = 'Alt Feed';
+            document.getElementById('pipIcon').textContent = '\uD83C\uDFA5';
         }
-      }
     }
-    if (total < SW*SH*0.012) return null;   // not enough skin — no face
 
-    // Trim the outer 10% of skin mass from each axis so stray hands/necks
-    // don't blow the box out.
-    function span(hist, n, mass){
-      const trim = mass * 0.10;   // ignore the outer 10% of skin mass per axis
-      let acc = 0, a = 0, b = n - 1;
-      for (let i = 0; i < n; i++){ acc += hist[i]; if (acc >= trim){ a = i; break; } }
-      acc = 0;
-      for (let i = n - 1; i >= 0; i--){ acc += hist[i]; if (acc >= trim){ b = i; break; } }
-      return a < b ? [a, b] : [0, n - 1];
+    function togglePip(){
+        pipVisible = !pipVisible;
+        document.getElementById('pipWindow').classList.toggle('pip-hidden', !pipVisible);
+        document.getElementById('pipToggleBtn').textContent = pipVisible ? '\u229E PiP' : '\u229F PiP';
     }
-    const [x0,x1] = span(cols, SW, total);
-    const [y0,y1] = span(rows, SH, total);
-    let w = (x1-x0)/SW, h = (y1-y0)/SH;
-    if (w <= 0.02 || h <= 0.02) return null;
 
-    // Faces are taller than wide — nudge the raw blob toward that ratio.
-    const cx = (x0/SW + w/2), cy = (y0/SH + h/2);
-    h = Math.max(h, w*1.15);
-    return { x: cx - w/2, y: cy - h/2, w, h };
-  }
+    function swapToLayout(){ setLayout(currentLayout === 'split' ? 'stack' : 'split'); }
 
-  /* ── per-frame pixel metrics ──────────────────────────────── */
-  // Metrics are measured INSIDE the face box when we have one. A dark room
-  // behind a well-lit face shouldn't fail the lighting check, and a blurry
-  // background shouldn't fail the sharpness check — only the face matters.
-  function region(){
-    if (!smBox) return { x0:1, y0:1, x1:SW-2, y1:SH-2 };
-    return {
-      x0: clamp(Math.round(smBox.x*SW), 1, SW-3),
-      y0: clamp(Math.round(smBox.y*SH), 1, SH-3),
-      x1: clamp(Math.round((smBox.x+smBox.w)*SW), 2, SW-2),
-      y1: clamp(Math.round((smBox.y+smBox.h)*SH), 2, SH-2)
+    // Picture-in-picture dragging via Pointer Events, which covers
+    // mouse, touch, and pen with one set of listeners.
+    (function(){
+        var pip = document.getElementById('pipWindow');
+        var dragging = false, startX, startY, startLeft, startTop;
+
+        pip.addEventListener('pointerdown', function(e){
+            if (e.target.closest('button')) return;
+            dragging = true;
+            pip.setPointerCapture(e.pointerId);
+            var r = pip.getBoundingClientRect();
+            var pr = pip.offsetParent.getBoundingClientRect();
+            pip.style.right = 'auto';
+            pip.style.bottom = 'auto';
+            startLeft = r.left - pr.left;
+            startTop = r.top - pr.top;
+            pip.style.left = startLeft + 'px';
+            pip.style.top = startTop + 'px';
+            startX = e.clientX;
+            startY = e.clientY;
+            pip.style.cursor = 'grabbing';
+        });
+
+        pip.addEventListener('pointermove', function(e){
+            if (!dragging) return;
+            var dx = e.clientX - startX;
+            var dy = e.clientY - startY;
+            pip.style.left = (startLeft + dx) + 'px';
+            pip.style.top = (startTop + dy) + 'px';
+        });
+
+        function endDrag(e){
+            if (!dragging) return;
+            dragging = false;
+            pip.style.cursor = 'move';
+            if (pip.hasPointerCapture(e.pointerId)) pip.releasePointerCapture(e.pointerId);
+        }
+        pip.addEventListener('pointerup', endDrag);
+        pip.addEventListener('pointercancel', endDrag);
+    })();
+
+    setInterval(function(){
+        timerSeconds++;
+        var m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+        var s = String(timerSeconds % 60).padStart(2, '0');
+        document.getElementById('sessionTimer').textContent = m + ':' + s;
+    }, 1000);
+
+    var TIER_STYLES = {
+        good: { chipCls: 'chip-good', panelCls: 'panel-good', valCls: 'val-good', bar: 'linear-gradient(90deg,var(--success),#4ade80)' },
+        warn: { chipCls: 'chip-warn', panelCls: 'panel-warn', valCls: 'val-warn', bar: 'linear-gradient(90deg,var(--warning),#fbbf24)' },
+        bad:  { chipCls: 'chip-bad',  panelCls: 'panel-bad',  valCls: 'val-bad',  bar: 'linear-gradient(90deg,var(--danger),#f87171)' }
     };
-  }
 
-  function measure(){
-    wctx.drawImage(video, 0, 0, SW, SH);
-    const data = wctx.getImageData(0, 0, SW, SH).data;
+    // Each scenario's signals are one object per panel, in fixed
+    // display order: identity, liveness, visual deepfake, audio
+    // deepfake, injection risk. This replaces the old design of six
+    // separate parallel arrays that had to be kept in sync by hand.
+    var mockScenarios = [
+        {
+            trust: 92, status: 'Trusted', statusClass: 'status-trusted', ringColor: 'var(--success)',
+            reasonIcon: 'OK', reasonBorder: 'var(--success)',
+            reason: 'All signals within normal thresholds. Biometric match confirmed with high confidence.',
+            signals: [
+                { tier: 'good', score: 95, chip: 'Pass', footer: 'ID document verified' },
+                { tier: 'good', score: 94, chip: 'Pass', footer: 'Challenge passed' },
+                { tier: 'good', score: 90, chip: 'Pass', footer: 'No artifacts found' },
+                { tier: 'good', score: 93, chip: 'Pass', footer: 'Voice pattern matched' },
+                { tier: 'good', score: 88, chip: 'Pass', footer: 'No anomalies detected' }
+            ]
+        },
+        {
+            trust: 72, status: 'Suspicious', statusClass: 'status-suspicious', ringColor: 'var(--warning)',
+            reasonIcon: 'WARN', reasonBorder: 'var(--warning)',
+            reason: 'Score reduced due to elevated injection-risk signal and anomalous audio patterns detected in frequency analysis.',
+            signals: [
+                { tier: 'good', score: 92, chip: 'Pass', footer: 'ID document verified' },
+                { tier: 'good', score: 88, chip: 'Pass', footer: 'Challenge passed' },
+                { tier: 'warn', score: 65, chip: 'Review', footer: 'Minor artifacts detected' },
+                { tier: 'warn', score: 78, chip: 'Review', footer: 'Slight frequency anomaly' },
+                { tier: 'bad', score: 45, chip: 'Alert', footer: 'Unusual frame timing \u2014 possible replay attack' }
+            ]
+        },
+        {
+            trust: 34, status: 'Potential fraud', statusClass: 'status-fraud', ringColor: 'var(--danger)',
+            reasonIcon: 'ERR', reasonBorder: 'var(--danger)',
+            reason: 'Multiple critical alerts: deepfake artifacts confirmed in both visual and audio streams. Session flagged for termination.',
+            signals: [
+                { tier: 'bad', score: 40, chip: 'Fail', footer: 'Identity mismatch detected' },
+                { tier: 'bad', score: 35, chip: 'Fail', footer: 'Liveness challenge failed' },
+                { tier: 'bad', score: 22, chip: 'Fail', footer: 'Deepfake artifacts confirmed' },
+                { tier: 'bad', score: 28, chip: 'Fail', footer: 'Synthetic voice detected' },
+                { tier: 'bad', score: 15, chip: 'Critical', footer: 'Active injection attempt detected' }
+            ]
+        }
+    ];
 
-    const gray = new Float32Array(SW*SH);
-    for (let p=0, i=0; p<SW*SH; p++, i+=4){
-      gray[p] = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+    function updateScreenReaderStatus(s){
+        document.getElementById('srStatus').textContent =
+            'Trust score ' + s.trust + ' out of 100, ' + s.status + '. ' + s.reason;
     }
 
-    const r = region();
-    let lumaSum = 0, lumaN = 0, lap = 0, lapN = 0, diff = 0;
+    function applyScenario(idx){
+        var s = mockScenarios[idx], t = s.trust, circ = 226;
 
-    for (let y=r.y0; y<=r.y1; y++){
-      for (let x=r.x0; x<=r.x1; x++){
-        const p = y*SW + x;
-        lumaSum += gray[p]; lumaN++;
-        // Sharpness: mean |Laplacian|. Blur, or a face re-shot off a screen,
-        // collapses this value.
-        lap += Math.abs(4*gray[p] - gray[p-1] - gray[p+1] - gray[p-SW] - gray[p+SW]);
-        lapN++;
-        if (prevGray) { diff += Math.abs(gray[p] - prevGray[p]); }
-      }
+        document.getElementById('ringFill').style.strokeDashoffset = circ - (t / 100) * circ;
+        document.getElementById('ringFill').style.stroke = s.ringColor;
+        document.getElementById('trustScore').textContent = t;
+        document.getElementById('ringLabel').style.color = s.ringColor;
+
+        var statusEl = document.getElementById('trustStatus');
+        statusEl.textContent = s.status;
+        statusEl.className = 'trust-status ' + s.statusClass;
+
+        document.getElementById('trustNeedle').style.left = t + '%';
+
+        var tW = '0%', sW = '0%', fW = '0%', tP = '\u2014', sP = '\u2014', fP = '\u2014';
+        if (t >= 80) { tW = ((t - 80) / 20 * 100) + '%'; tP = t + '%'; }
+        else if (t >= 50) { sW = ((t - 50) / 30 * 100) + '%'; sP = t + '%'; }
+        else { fW = ((50 - t) / 50 * 100) + '%'; fP = (100 - t * 2) + '%'; }
+
+        document.getElementById('segTrusted').style.width = tW;
+        document.getElementById('segSuspicious').style.width = sW;
+        document.getElementById('segFraud').style.width = fW;
+        document.getElementById('pctTrusted').textContent = tP;
+        document.getElementById('pctSuspicious').textContent = sP;
+        document.getElementById('pctFraud').textContent = fP;
+
+        var icons = { OK: '\u2705', WARN: '\u26A0\uFE0F', ERR: '\uD83D\uDEA8' };
+        document.getElementById('reasonIcon').textContent = icons[s.reasonIcon] + ' ';
+        document.getElementById('reasonText').textContent = s.reason;
+        document.getElementById('reasonArea').style.borderLeftColor = s.reasonBorder;
+
+        var panels = document.querySelectorAll('.score-panel');
+        s.signals.forEach(function(sig, i){
+            var tier = TIER_STYLES[sig.tier];
+            var panel = panels[i];
+
+            panel.classList.remove('panel-good', 'panel-warn', 'panel-bad');
+            panel.classList.add(tier.panelCls);
+
+            var valEl = document.getElementById('val' + i);
+            valEl.textContent = sig.score;
+            valEl.className = 'score-panel-value ' + tier.valCls;
+
+            var barEl = document.getElementById('bar' + i);
+            barEl.style.width = sig.score + '%';
+            barEl.style.background = tier.bar;
+
+            var chipEl = document.getElementById('chip' + i);
+            chipEl.textContent = sig.chip;
+            chipEl.className = 'score-chip ' + tier.chipCls;
+
+            document.getElementById('foot' + i).textContent = sig.footer;
+        });
+
+        updateScreenReaderStatus(s);
     }
 
-    const meanLuma = lumaN ? lumaSum / lumaN : 0;
-    const sharp    = lapN  ? lap / lapN      : 0;
-    const motion   = (prevGray && lapN) ? diff / lapN : null;
+    function generateSessionId(){
+        var d = new Date();
+        var ymd = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+        var rand = Math.random().toString(16).slice(2, 6).toUpperCase();
+        return 'VFY-' + ymd + '-' + rand;
+    }
 
-    prevGray = gray;
+    function updateViewportLabel(){
+        var w = window.innerWidth;
+        var label = w <= 640 ? 'Mobile' : w <= 1100 ? 'Tablet' : 'Desktop';
+        document.getElementById('deviceIndicator').textContent = 'Viewport \u00B7 ' + label;
+    }
+    window.addEventListener('resize', updateViewportLabel);
 
-    mLight = ema(mLight, meanLuma, 0.18);
-    mSharp = ema(mSharp, sharp,    0.18);
-    if (motion !== null) mMotion = ema(mMotion, motion, 0.22);
+    // ── Receive the PEER'S stream via WebRTC ─────
+    // index.html is the verifier's dashboard. It does not open its own
+    // camera; it joins the same signaling room as participant.html and
+    // displays whatever stream arrives on ontrack. This device is
+    // receive-only: it never calls getUserMedia() and never sends media.
+    const RTC_ROOM = "demo-room";
+    var rtcSocket, rtcPc;
+    var RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
-    return data;
-  }
+    function joinAsVerifier(){
+        var video = document.getElementById('remoteVideo');
+        var panel = document.getElementById('videoPanel');
+        var label = panel.querySelector('.video-label-main');
 
-  /* ── scoring ──────────────────────────────────────────────── */
-  function scoreAll(){
-    // Framing: face height should fill 32–66% of the frame, roughly centred.
-    let framing = 0, hint = null;
-    if (smBox){
-      const h  = smBox.h;
-      const cx = smBox.x + smBox.w/2;
-      const cy = smBox.y + smBox.h/2;
-      const offset = Math.hypot(cx-0.5, cy-0.5);
+        if (typeof io === 'undefined') {
+            if (label) label.textContent = 'Signaling library failed to load';
+            return;
+        }
 
-      let size;
-      if (h < 0.32){ size = clamp(h/0.32, 0, 1); hint = 'Move a little closer'; }
-      else if (h > 0.66){ size = clamp((1-h)/0.34, 0, 1); hint = 'Move back slightly'; }
-      else size = 1;
+        // Same-origin socket (localhost + HTTPS tunnel compatible)
+        rtcSocket = io();
 
-      const centred = clamp(1 - offset/0.28, 0, 1);
-      if (!hint && offset > 0.16) hint = 'Centre your face';
-      framing = clamp(size*0.65 + centred*0.35, 0, 1);
+        rtcPc = new RTCPeerConnection(RTC_CONFIG);
+
+	rtcPc.addTransceiver('video', { direction: 'recvonly' });
+	rtcPc.addTransceiver('audio', { direction: 'recvonly' });
+
+        // This is the only place this page touches media: receiving the
+        // remote participant's tracks and attaching them to the main
+        // video element (and mirroring into the PiP window via the
+        // existing attachPipStream hook, if in use).
+        rtcPc.ontrack = function(event){
+            video.srcObject = event.streams[0];
+            video.onloadedmetadata = function(){ panel.classList.add('stream-active'); };
+        };
+
+        rtcPc.onicecandidate = function(event){
+            if (event.candidate) {
+                rtcSocket.emit('ice-candidate', { room: RTC_ROOM, candidate: event.candidate });
+            }
+        };
+
+// Status-only now -- offer creation is triggered by the
+        // server's 'ready-to-offer' event instead, which fires
+        // deterministically once both roles have joined.
+        rtcSocket.on('peer-joined', function(){
+            if (label) label.textContent = 'Participant joined — negotiating...';
+        });
+
+        rtcSocket.on('ready-to-offer', async function(){
+            if (label) label.textContent = 'Participant joined — negotiating...';
+            var offer = await rtcPc.createOffer();
+            await rtcPc.setLocalDescription(offer);
+            rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
+        });
+
+        rtcSocket.on('peer-already-present', async function(){
+            var offer = await rtcPc.createOffer();
+            await rtcPc.setLocalDescription(offer);
+            rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
+        });
+
+        rtcSocket.on('offer', async function(data){
+            await rtcPc.setRemoteDescription(data.sdp);
+            var answer = await rtcPc.createAnswer();
+            await rtcPc.setLocalDescription(answer);
+            rtcSocket.emit('answer', { room: RTC_ROOM, sdp: answer });
+        });
+
+        rtcSocket.on('answer', async function(data){
+            await rtcPc.setRemoteDescription(data.sdp);
+        });
+
+        rtcSocket.on('ice-candidate', async function(data){
+            try {
+                await rtcPc.addIceCandidate(data.candidate);
+            } catch (err) {
+                console.error('ICE candidate error:', err);
+            }
+        });
+
+        rtcSocket.emit('join', { room: RTC_ROOM, role: 'verifier' });
+        if (label) label.textContent = 'Waiting for participant to join...';
+    }
+
+    // Hook for the Day 2 WebRTC signaling page (call.html): once your
+    // RTCPeerConnection's ontrack handler gives you the remote peer's
+    // MediaStream, call window.attachPipStream(stream) from there to
+    // show it in the picture-in-picture window.
+    function attachPipStream(stream){
+        var video = document.getElementById('pipVideo');
+        var win = document.getElementById('pipWindow');
+        video.srcObject = stream;
+        video.onloadedmetadata = function(){ win.classList.add('stream-active'); };
+    }
+    window.attachPipStream = attachPipStream;
+
+// ─────────────────────────────────────────────
+// Live polling — replaces mock scenario cycling.
+// Fetches real signal data from Flask backend
+// every 1.5 seconds and updates the dashboard.
+// ─────────────────────────────────────────────
+async function fetchLiveScores() {
+    try {
+        const res = await fetch('/scores');
+        if (!res.ok) throw new Error('Backend returned ' + res.status);
+        const data = await res.json();
+        applyLiveData(data);
+    } catch (err) {
+        // Backend unreachable — show a warning state
+        // but don't crash the dashboard
+        document.getElementById('reasonText').textContent =
+            'Cannot reach backend at localhost:5000 — is app.py running?';
+        document.getElementById('reasonArea').style.borderLeftColor = 'var(--danger)';
+    }
+}
+
+// ── Liveness challenge rendering (Day 4) ────
+const CHALLENGE_DISPLAY_NAMES = {
+    blink:      'Blink',
+    turn_left:  'Turn head left',
+    turn_right: 'Turn head right'
+};
+
+const FAIL_REASON_DISPLAY = {
+    timeout:                  'Timed out — no response detected',
+    wrong_direction:          'Wrong direction detected',
+    spoof_detected:           'Spoof detected (texture/depth anomaly)',
+    multiple_faces_detected:  'Multiple faces detected in frame'
+};
+
+let lastRenderedChallengeTimestamp = null;
+
+function renderLivenessChallenge(challenge) {
+    const promptEl   = document.getElementById('livenessPrompt');
+    const countdownEl = document.getElementById('livenessCountdown');
+    const responseEl  = document.getElementById('livenessResponseTime');
+    const footEl      = document.getElementById('foot1');
+    if (!promptEl) return;
+
+    if (!challenge) {
+        promptEl.textContent = 'Waiting for challenge...';
+        countdownEl.textContent = '—';
+        responseEl.textContent = '—';
+        if (footEl) footEl.textContent = 'Awaiting liveness module...';
+        return;
+    }
+
+    const typeName = CHALLENGE_DISPLAY_NAMES[challenge.challenge_type] || challenge.challenge_type;
+    lastRenderedChallengeTimestamp = challenge.timestamp;
+
+    if (challenge.challenge_passed) {
+        promptEl.textContent = '"' + challenge.prompt + '" (' + typeName + ') — ✓ Passed';
+        countdownEl.textContent = 'Within ' + challenge.timeout_sec + 's window';
+        responseEl.textContent = challenge.response_time_ms + 'ms response';
+        if (footEl) footEl.textContent = typeName + ' challenge passed in ' + challenge.response_time_ms + 'ms';
     } else {
-      hint = 'Position your face in the frame';
+        const reasonText = FAIL_REASON_DISPLAY[challenge.fail_reason] || challenge.fail_reason;
+        promptEl.textContent = '"' + challenge.prompt + '" (' + typeName + ') — ✗ Failed';
+        countdownEl.textContent = reasonText;
+        responseEl.textContent = challenge.response_time_ms + 'ms response';
+        if (footEl) footEl.textContent = typeName + ' challenge failed — ' + reasonText;
+    }
+}
+
+
+// ── Identity match rendering (Day 5) ────────
+const CONFIDENCE_DISPLAY = {
+    high: 'High confidence',
+    low:  'Low confidence — uncertain zone',
+    none: 'No confidence — no clear face match'
+};
+
+function renderIdentityDetail(identity) {
+    const simEl    = document.getElementById('identitySimilarity');
+    const confEl   = document.getElementById('identityConfidence');
+    const warnEl   = document.getElementById('identityMultiFaceWarning');
+    const footEl   = document.getElementById('foot0');
+    if (!simEl) return;
+
+    if (!identity) {
+        simEl.textContent = 'Similarity: —';
+        confEl.textContent = '—';
+        warnEl.style.display = 'none';
+        if (footEl) footEl.textContent = 'Awaiting identity module...';
+        return;
     }
 
-    // Light: target mean luma 80–185.
-    let light;
-    if (mLight === null) light = 0;
-    else if (mLight < 80)  { light = clamp(mLight/80, 0, 1); if(!hint) hint = 'Find brighter light'; }
-    else if (mLight > 185) { light = clamp((255-mLight)/70, 0, 1); if(!hint) hint = 'Too much glare'; }
-    else light = 1;
+    const simPct = (identity.similarity_score * 100).toFixed(1);
+    simEl.textContent = 'Similarity: ' + simPct + '% (threshold ' + (identity.threshold_used * 100).toFixed(0) + '%)';
+    confEl.textContent = CONFIDENCE_DISPLAY[identity.confidence] || identity.confidence;
+    confEl.style.color = identity.confidence === 'high' ? '#4ade80'
+                        : identity.confidence === 'low'  ? '#fbbf24'
+                        : '#f87171';
 
-    // Sharpness: below ~6 is a soft / blurred / re-screened image.
-    const sharp = mSharp === null ? 0 : clamp((mSharp - 2.5) / 9, 0, 1);
-    if (sharp < 0.45 && !hint) hint = 'Image is blurry — clean the lens';
+    warnEl.style.display = identity.multiple_faces_detected ? 'block' : 'none';
 
-    // Stability: some motion is expected (a live person breathes). Too much
-    // motion blurs the capture; literally zero motion means a static image.
-    let stable;
-    if (mMotion === null) stable = 0;
-    else if (mMotion < 0.35) { stable = 0.35; if(!hint) hint = 'No motion detected'; }
-    else if (mMotion > 7.5)  { stable = clamp(1 - (mMotion-7.5)/9, 0, 1); if(!hint) hint = 'Hold still'; }
-    else stable = 1;
-
-    return { framing, light, sharp, stable, hint };
-  }
-
-  /* ── telemetry paint ──────────────────────────────────────── */
-  const tel = {
-    framing:['telFraming','vFraming','fFraming'],
-    light:  ['telLight','vLight','fLight'],
-    sharp:  ['telSharp','vSharp','fSharp'],
-    stable: ['telStable','vStable','fStable']
-  };
-  function tier(v){ return v >= 0.75 ? 'good' : v >= 0.45 ? 'fair' : 'poor'; }
-  function paintTel(k, v, has){
-    const [wrapId, valId, fillId] = tel[k];
-    const pct = Math.round(v*100);
-    document.getElementById(wrapId).dataset.t = has ? tier(v) : '';
-    document.getElementById(valId).textContent = has ? pct + '%' : '—';
-    document.getElementById(fillId).style.width = (has ? pct : 0) + '%';
-  }
-
-  /* ── HUD drawing (geometry only — text lives in DOM, unmirrored) ── */
-  function bracket(x, y, w, h, len, col, lw){
-    ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.lineCap = 'round';
-    const c = [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]];
-    for (const [px,py,sx,sy] of c){
-      ctx.beginPath();
-      ctx.moveTo(px + sx*len, py);
-      ctx.lineTo(px, py);
-      ctx.lineTo(px, py + sy*len);
-      ctx.stroke();
+    if (footEl) {
+        if (identity.verdict === 'REAL') {
+            footEl.textContent = 'Identity match confirmed — ' + simPct + '% similarity';
+        } else if (identity.confidence === 'low') {
+            footEl.textContent = 'Uncertain match — ' + simPct + '% similarity, below confident threshold';
+        } else {
+            footEl.textContent = 'Identity mismatch — ' + simPct + '% similarity';
+        }
     }
-  }
+}
 
-  function draw(s){
-    const W = hud.width, H = hud.height;
-    ctx.clearRect(0, 0, W, H);
 
-    const good = s.framing > .7 && s.light > .7 && s.sharp > .5 && s.stable > .7;
-    const col  = capture >= 100 ? '#22c97a' : good ? '#22c97a' : smBox ? '#6b8aff' : 'rgba(107,138,255,.30)';
+// ── Session log rendering (Day 6-7 stretch goal) ────
+// Mirrors NIST SP 800-63-4's continuous-evaluation framing: the
+// dashboard doesn't just show a point-in-time score, it shows the
+// timestamped trail of every signal that fed into it.
+const LOG_EVENT_STYLE = {
+    liveness_challenge: { icon: '&#128065;', color: '#8fa8ff' },
+    identity_check:      { icon: '&#128100;', color: '#8fa8ff' },
+    band_change:         { icon: '&#9888;',   color: '#fbbf24' },
+    injection_alert:     { icon: '&#128246;', color: '#f87171' },
+    audio_alert:         { icon: '&#127911;', color: '#f87171' },
+    session_reset:       { icon: '&#8635;',   color: '#7c88ab' }
+};
 
-    // Guide outline when nothing is locked yet
-    if (!smBox){
-      const gw = W*0.42, gh = H*0.62;
-      const gx = (W-gw)/2, gy = (H-gh)/2;
-      ctx.setLineDash([5, 7]);
-      bracket(gx, gy, gw, gh, 26, 'rgba(107,138,255,.30)', 2);
-      ctx.setLineDash([]);
-      return;
+const BAND_LOG_COLOR = { trusted: '#4ade80', suspicious: '#fbbf24', fraud: '#f87171' };
+
+let lastRenderedLogLength = 0;
+
+function renderSessionLog(log) {
+    const listEl = document.getElementById('sessionLogList');
+    if (!listEl) return;
+
+    if (!log || log.length === 0) {
+        listEl.innerHTML = '<div style="color:#5a6484;">No events yet — session log will populate as verification signals arrive.</div>';
+        lastRenderedLogLength = 0;
+        return;
     }
 
-    const bx = smBox.x*W, by = smBox.y*H, bw = smBox.w*W, bh = smBox.h*H;
+    // Only re-render when new entries have actually arrived, so the
+    // scroll position and any hover state isn't reset every 1.5s poll.
+    if (log.length === lastRenderedLogLength) return;
+    lastRenderedLogLength = log.length;
 
-    // Soft vignette outside the face box — pulls the eye to the subject
-    ctx.save();
-    ctx.fillStyle = 'rgba(4,7,15,.34)';
-    ctx.beginPath();
-    ctx.rect(0, 0, W, H);
-    ctx.roundRect(bx-8, by-8, bw+16, bh+16, 16);
-    ctx.fill('evenodd');
-    ctx.restore();
+    listEl.innerHTML = log.map(function(entry){
+        const style = LOG_EVENT_STYLE[entry.event_type] || { icon: '&#8226;', color: '#8b95b5' };
+        const color = entry.event_type === 'band_change' && entry.band
+            ? (BAND_LOG_COLOR[entry.band] || style.color)
+            : style.color;
+        const time = new Date(entry.timestamp).toLocaleTimeString();
+        return '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">' +
+            '<span style="color:#5a6484;font-variant-numeric:tabular-nums;white-space:nowrap;">' + time + '</span>' +
+            '<span style="color:' + color + ';">' + style.icon + '</span>' +
+            '<span style="color:#c9d2ea;">' + entry.detail + '</span>' +
+        '</div>';
+    }).join('');
+}
 
-    // Landmark mesh (real points when MediaPipe is live)
-    if (landmarks && landmarks.length){
-      ctx.fillStyle = 'rgba(107,138,255,.55)';
-      for (let i=0; i<landmarks.length; i+=3){
-        const p = landmarks[i];
-        ctx.fillRect(p.x*W - 0.8, p.y*H - 0.8, 1.6, 1.6);
-      }
+document.getElementById('sessionResetBtn').addEventListener('click', async function(){
+    if (!confirm('Reset the session? This clears all verification signals and the log.')) return;
+    try {
+        await fetch('/session-reset', { method: 'POST' });
+        lastRenderedLogLength = 0;
+        fetchLiveScores();
+    } catch (err) {
+        console.error('Session reset failed:', err);
+    }
+});
+
+
+function applyLiveData(data) {
+    // ── Trust score + band ──────────────────────
+    let trust = data.ema_trust_score !== null && data.ema_trust_score !== undefined
+        ? data.ema_trust_score
+        : data.trust_score;
+    const band  = data.trust_band;  // "trusted" | "suspicious" | "fraud"
+
+    if (trust === null || trust === undefined) {
+        document.getElementById('reasonText').textContent =
+            'Awaiting signals — no modules have reported yet.';
+        return;
     }
 
-    // Scan sweep — only while still capturing
-    if (capture < 100){
-      const sy = by + (bh * sweep);
-      const g = ctx.createLinearGradient(0, sy-22, 0, sy+22);
-      g.addColorStop(0,   'rgba(107,138,255,0)');
-      g.addColorStop(0.5, 'rgba(107,138,255,.30)');
-      g.addColorStop(1,   'rgba(107,138,255,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(bx, sy-22, bw, 44);
-      ctx.strokeStyle = 'rgba(150,175,255,.85)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.moveTo(bx, sy); ctx.lineTo(bx+bw, sy); ctx.stroke();
+    // Ring
+    const circ = 226;
+    const ringColors = { trusted: 'var(--success)', suspicious: 'var(--warning)', fraud: 'var(--danger)' };
+    document.getElementById('ringFill').style.strokeDashoffset = circ - (trust / 100) * circ;
+    document.getElementById('ringFill').style.stroke = ringColors[band] || 'var(--warning)';
+    document.getElementById('trustScore').textContent = trust;
+    document.getElementById('ringLabel').style.color = ringColors[band] || 'var(--warning)';
+
+    // Status badge
+    const statusEl = document.getElementById('trustStatus');
+    const statusMap = {
+        trusted:    { text: 'Trusted',        cls: 'status-trusted'    },
+        suspicious: { text: 'Suspicious',      cls: 'status-suspicious' },
+        fraud:      { text: 'Potential Fraud', cls: 'status-fraud'      }
+    };
+    const s = statusMap[band] || statusMap.suspicious;
+    statusEl.textContent = s.text;
+    statusEl.className   = 'trust-status ' + s.cls;
+
+    // Needle
+    document.getElementById('trustNeedle').style.left = trust + '%';
+
+    // Segment bars
+    const tW = band === 'trusted'    ? ((trust - 80) / 20 * 100) + '%' : '0%';
+    const sW = band === 'suspicious' ? ((trust - 50) / 30 * 100) + '%' : '0%';
+    const fW = band === 'fraud'      ? ((50 - trust) / 50 * 100) + '%' : '0%';
+    document.getElementById('segTrusted').style.width    = tW;
+    document.getElementById('segSuspicious').style.width = sW;
+    document.getElementById('segFraud').style.width      = fW;
+    document.getElementById('pctTrusted').textContent    = band === 'trusted'    ? trust + '%' : '—';
+    document.getElementById('pctSuspicious').textContent = band === 'suspicious' ? trust + '%' : '—';
+    document.getElementById('pctFraud').textContent      = band === 'fraud'      ? (100 - trust * 2) + '%' : '—';
+
+    // Reason string
+    const icons = { trusted: '✅ ', suspicious: '⚠️ ', fraud: '🚨 ' };
+    document.getElementById('reasonIcon').textContent = icons[band] || '⚠️ ';
+    document.getElementById('reasonText').textContent = data.reason || 'No reason provided.';
+    document.getElementById('reasonArea').style.borderLeftColor = ringColors[band];
+
+    // Screen reader announcement
+    document.getElementById('srStatus').textContent =
+        'Trust score ' + trust + ' out of 100, ' + s.text + '. ' + (data.reason || '');
+
+    // ── Conflict Alert Banner (Week 3 Day 4) ────
+    const conflictAlert = document.getElementById('conflictAlert');
+    const conflictText = document.getElementById('conflictText');
+    if (data.conflict_detected && conflictAlert) {
+        conflictAlert.classList.add('visible');
+        const ct = (data.conflict_types || []).join(', ')
+            .replace(/identity_vs_visual_deepfake/g, 'identity matched but visual deepfake risk is elevated')
+            .replace(/liveness_vs_injection/g, 'liveness passed but injection risk is high');
+        conflictText.textContent = 'Conflicting signals detected — ' + ct;
+    } else if (conflictAlert) {
+        conflictAlert.classList.remove('visible');
     }
 
-    // Corner brackets — the lock
-    bracket(bx, by, bw, bh, Math.min(bw, bh)*0.22, col, 2.5);
+    // ── Five signal panels ──────────────────────
+    const sig   = data.signals || {};
+    const tiers = data.tiers   || {};
+    const missing = data.signal_missing || [];
 
-    // Capture progress traced around the face box perimeter
-    if (capture > 0){
-      const per = 2*(bw+bh);
-      ctx.save();
-      ctx.strokeStyle = col;
-      ctx.lineWidth = 2.5;
-      ctx.setLineDash([per*(capture/100), per]);
-      ctx.lineDashOffset = 0;
-      ctx.beginPath();
-      ctx.roundRect(bx, by, bw, bh, 10);
-      ctx.stroke();
-      ctx.restore();
-    }
-  }
+    const PANELS = [
+        { id: 0, label: 'Identity',        field: 'identity_score',        tier: tiers.identity        },
+        { id: 1, label: 'Liveness',        field: 'liveness_score',        tier: tiers.liveness        },
+        { id: 2, label: 'Visual deepfake', field: 'visual_deepfake_score', tier: tiers.visual_deepfake },
+        { id: 3, label: 'Audio deepfake',  field: 'audio_deepfake_score',  tier: tiers.audio_deepfake  },
+        { id: 4, label: 'Injection risk',  field: 'injection_risk_score',  tier: tiers.injection_risk  }
+    ];
 
-  /* ── main loop ────────────────────────────────────────────── */
-  function resize(){
-    const r = video.getBoundingClientRect();
-    if (!r.width || !r.height) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    hud.width  = Math.round(r.width  * dpr);
-    hud.height = Math.round(r.height * dpr);
-    hud.style.width  = r.width + 'px';
-    hud.style.height = r.height + 'px';
-  }
-  window.addEventListener('resize', resize);
+    const TIER_STYLES = {
+        good: { chipCls: 'chip-good', panelCls: 'panel-good', valCls: 'val-good', bar: 'linear-gradient(90deg,var(--success),#4ade80)', chip: 'Pass'  },
+        warn: { chipCls: 'chip-warn', panelCls: 'panel-warn', valCls: 'val-warn', bar: 'linear-gradient(90deg,var(--warning),#fbbf24)', chip: 'Review'},
+        bad:  { chipCls: 'chip-bad',  panelCls: 'panel-bad',  valCls: 'val-bad',  bar: 'linear-gradient(90deg,var(--danger),#f87171)',  chip: 'Alert' }
+    };
 
-  let last = performance.now();
-  function loop(now){
-    requestAnimationFrame(loop);
-    if (video.readyState < 2 || !video.videoWidth) return;
-    if (hud.width === 0) resize();
+    // Map field names to module names for signal_missing check
+    const FIELD_TO_MODULE = {
+        'identity_score': 'identity',
+        'liveness_score': 'vision',
+        'visual_deepfake_score': 'visual_deepfake',
+        'audio_deepfake_score': 'audio',
+        'injection_risk_score': 'security'
+    };
 
-    const dt = Math.min((now - last) / 1000, 0.1);
-    last = now;
+    PANELS.forEach(panel => {
+        const score    = sig[panel.field];
+        const tierKey  = panel.tier || 'warn';
+        const style    = TIER_STYLES[tierKey] || TIER_STYLES.warn;
+        const moduleName = FIELD_TO_MODULE[panel.field];
+        const isMissing = missing.includes(moduleName);
+        const hasScore = score !== null && score !== undefined && !isMissing;
 
-    // The camera runs at ~30fps while this loop runs at ~60Hz, so half the
-    // ticks would re-read an identical frame — which reads as "zero motion"
-    // and would wrongly trip the static-image check. Only measure when the
-    // video has actually advanced; keep animating the HUD regardless.
-    if (video.currentTime === lastVideoTime){
-      sweep = (sweep + dt*0.55) % 1;
-      draw(lastScore);
-      return;
-    }
-    lastVideoTime = video.currentTime;
+        const panelEl = document.querySelector('.score-panel:nth-child(' + (panel.id + 1) + ')');
+        if (panelEl) {
+            panelEl.classList.remove('panel-good', 'panel-warn', 'panel-bad', 'panel-pending');
+            panelEl.classList.add(hasScore ? style.panelCls : 'panel-pending');
+        }
 
-    // fps
-    fpsN++;
-    if (now - fpsT > 500){ fps = Math.round(fpsN * 1000 / (now - fpsT)); fpsN = 0; fpsT = now; }
+        const valEl = document.getElementById('val' + panel.id);
+        if (valEl) {
+            valEl.textContent = hasScore ? Math.round(score) : '—';
+            valEl.className   = 'score-panel-value ' + (hasScore ? style.valCls : '');
+            if (!hasScore) valEl.style.color = '#7c88ab';
+        }
 
-    const data = measure();
+        const barEl = document.getElementById('bar' + panel.id);
+        if (barEl) {
+            barEl.style.width      = hasScore ? score + '%' : '0%';
+            barEl.style.background = hasScore ? style.bar : 'transparent';
+        }
 
-    // Detection
-    if (mode === 'mesh' && landmarker){
-      try {
-        const res = landmarker.detectForVideo(video, now);
-        if (res && res.faceLandmarks && res.faceLandmarks.length){
-          landmarks = res.faceLandmarks[0];
-          let minX=1, minY=1, maxX=0, maxY=0;
-          for (const p of landmarks){
-            if (p.x<minX) minX=p.x; if (p.x>maxX) maxX=p.x;
-            if (p.y<minY) minY=p.y; if (p.y>maxY) maxY=p.y;
-          }
-          box = { x:minX, y:minY, w:maxX-minX, h:maxY-minY };
-        } else { box = null; landmarks = null; }
-      } catch(e){ box = detectHeuristic(data); landmarks = null; }
-    } else {
-      box = detectHeuristic(data);
-      landmarks = null;
-    }
+        const chipEl = document.getElementById('chip' + panel.id);
+        if (chipEl) {
+            chipEl.textContent = hasScore ? style.chip : 'Pending';
+            chipEl.className   = 'score-chip ' + (hasScore ? style.chipCls : 'chip-pending');
+        }
 
-    // Smooth the box so brackets glide instead of jittering
-    if (box){
-      smBox = smBox ? {
-        x: lerp(smBox.x, box.x, 0.25),
-        y: lerp(smBox.y, box.y, 0.25),
-        w: lerp(smBox.w, box.w, 0.25),
-        h: lerp(smBox.h, box.h, 0.25)
-      } : box;
-    } else {
-      smBox = null;
-      landmarks = null;
-    }
+        const footEl = document.getElementById('foot' + panel.id);
+        const isCustomFooter = panel.field === 'liveness_score' || panel.field === 'identity_score'
+            || (panel.field === 'audio_deepfake_score' && !hasScore);
+        if (footEl && !isCustomFooter) {
+            footEl.textContent = hasScore
+                ? panel.label + ' score: ' + Math.round(score)
+                : 'Awaiting ' + panel.label.toLowerCase() + ' module...';
+        }
 
-    const s = scoreAll();
-    lastScore = s;
-    const has = !!smBox;
-
-    paintTel('framing', s.framing, has);
-    paintTel('light',   s.light,   mLight !== null);
-    paintTel('sharp',   s.sharp,   mSharp !== null);
-    paintTel('stable',  s.stable,  mMotion !== null);
-
-    // Capture accumulates only while every signal is acceptable, and bleeds
-    // away when it isn't — so you cannot bank progress from one lucky frame.
-    const allGood = has && s.framing > .7 && s.light > .7 && s.sharp > .5 && s.stable > .7;
-    capture = clamp(capture + (allGood ? dt*42 : -dt*70), 0, 100);
-    pctVal.textContent = Math.round(capture);
-
-    sweep = (sweep + dt*0.55) % 1;
-
-    // State + guidance copy
-    if (capture >= 100){
-      chipState.dataset.s = 'done';
-      chipText.textContent = 'Captured';
-      guide.textContent = 'Face captured — awaiting verifier';
-      guide.dataset.tone = 'ok';
-    } else if (allGood){
-      chipState.dataset.s = 'scan';
-      chipText.textContent = 'Scanning';
-      guide.textContent = 'Hold still — capturing';
-      guide.dataset.tone = 'ok';
-    } else if (has){
-      chipState.dataset.s = 'lock';
-      chipText.textContent = 'Face found';
-      guide.textContent = s.hint || 'Adjust your position';
-      guide.dataset.tone = 'warn';
-    } else {
-      chipState.dataset.s = 'idle';
-      chipText.textContent = 'Searching';
-      guide.textContent = 'Position your face in the frame';
-      guide.dataset.tone = 'warn';
-    }
-
-    // ── HOOK ──────────────────────────────────────────────────
-    // When the backend later emits a verdict, this is where the redirect
-    // goes. Capture reaching 100 is a *local quality* gate, not a verdict —
-    // it deliberately does NOT redirect on its own.
-    //
-    //   socket.on('verification-result', d => {
-    //     if (d.status === 'passed') window.location.href = 'verified.html';
-    //   });
-    // ──────────────────────────────────────────────────────────
-
-    draw(s);
-  }
-
-  video.addEventListener('loadedmetadata', resize);
-  requestAnimationFrame(loop);
-})();
-</script>
-
-<!-- MediaPipe upgrade. If this fails (offline, CDN blocked, old browser)
-     nothing breaks — the heuristic detector above stays in charge. -->
-<script type="module">
-  try {
-    const { FaceLandmarker, FilesetResolver } =
-      await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14');
-    const files = await FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-    );
-    const lm = await FaceLandmarker.createFromOptions(files, {
-      baseOptions: {
-        modelAssetPath:
-          'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-        delegate: 'GPU'
-      },
-      runningMode: 'VIDEO',
-      numFaces: 1
+        // Show/hide spinner for missing signals (audio panel already has one)
+        if (panel.field === 'audio_deepfake_score') {
+            const spinner = document.getElementById('audioSpinner');
+            const footerText = document.getElementById('audioFooterText');
+            if (spinner && footerText) {
+                spinner.style.display = isMissing ? 'inline-block' : 'none';
+                footerText.textContent = isMissing ? 'Audio module not yet connected' : (hasScore ? panel.label + ' score: ' + Math.round(score) : 'Awaiting audio module...');
+            }
+        }
     });
-    window.__onLandmarkerReady(lm);
-  } catch (e) {
-    console.info('[hud] face mesh unavailable, using heuristic detector:', e.message);
-  }
-</script>
 
+    // ── Liveness challenge detail (Day 4) ───────
+    // Shows the exact prompt M1 issued, a live countdown against its
+    // timeout, and the pass/fail result with response time — this is
+    // the "story, not just a score" panel.
+    renderLivenessChallenge(data.challenge);
+    renderIdentityDetail(data.identity);
+    renderSessionLog(data.session_log);
 
-<!-- ═══════════════════════════════════════════════════════════
-     WebRTC — unchanged. Sender-only contract preserved exactly.
-     ═══════════════════════════════════════════════════════════ -->
-<script>
-  const ROOM = "demo-room";
-  const socket = io(window.location.hostname === 'localhost'
-    ? 'http://localhost:5000'
-    : `http://${window.location.hostname}:5000`);
-  const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-  let pc, localStream;
+    // ── Visual deepfake panel extras (Week 3 Day 1) ────
+    // Reads from data.visual_deepfake — M1's real "visual_deepfake" module
+    // payload (deepfake_probability, confidence, cascade_stage, latency,
+    // skipped) — NOT data.raw.vision, which is M1's separate Week 2
+    // liveness-challenge module and never carries these fields.
+    const vdf = data.visual_deepfake;
+    const visualConf = document.getElementById('visualConfidence');
+    const visualFace = document.getElementById('visualFaceState');
+    const visualCascade = document.getElementById('visualCascade');
 
-  /* ── Faza 1: analysis frame stream ─────────────────────────────
-     Sends ~5 JPEG frames/sec to the backend's in-process
-     AnalysisEngine over the SAME socket used for WebRTC signaling.
-     Completely independent of the WebRTC peer connection — the
-     dashboard video and the analysis pipeline never block each other. */
-  const SESSION_ID = 'web_' + Math.random().toString(16).slice(2, 10);
-  // 10fps: a blink lasts ~150-300ms. At 5fps (200ms/frame) a whole blink
-  // can fall BETWEEN two frames and the blink_twice challenge times out
-  // even when the user obeys. 10fps guarantees 1-3 frames per blink.
-  const ANALYSIS_FPS = 10;
-  const analysisCanvas = document.createElement('canvas');
-  analysisCanvas.width = 480; analysisCanvas.height = 360;
-  const analysisCtx = analysisCanvas.getContext('2d');
-  let analysisTimer = null;
-
-  function startAnalysisStream() {
-    const videoEl = document.getElementById('localPreview');
-    if (analysisTimer) clearInterval(analysisTimer);
-    // Mirror the analysis frame. main.py always ran the liveness engine on
-    // cv2.flip'ed frames, so turn_left/turn_right yaw signs are calibrated
-    // to the MIRRORED view. Sending raw frames would invert directions and
-    // make every turn challenge fail even when the user obeys the prompt.
-    analysisCtx.setTransform(-1, 0, 0, 1, analysisCanvas.width, 0);
-    analysisTimer = setInterval(() => {
-      if (!localStream || videoEl.readyState < 2) return;
-      analysisCtx.drawImage(videoEl, 0, 0, analysisCanvas.width, analysisCanvas.height);
-      socket.emit('analysis_frame', {
-        session_id: SESSION_ID,
-        jpg: analysisCanvas.toDataURL('image/jpeg', 0.7)
-      });
-    }, 1000 / ANALYSIS_FPS);
-  }
-
-  /* ── Faza 2: render backend verdicts into the readout panel ── */
-  const CHALLENGE_LABELS = {
-    blink_twice: 'Blink twice',
-    turn_left:   'Turn your head LEFT',
-    turn_right:  'Turn your head RIGHT'
-  };
-  const DENY_LABELS = {
-    no_face_detected:            'No face detected',
-    multiple_faces:              'Multiple faces in frame',
-    '2d_spoof_detected_sustained': 'Spoof detected (screen/photo)',
-    virtual_camera_detected:     'Virtual camera detected',
-    identity_continuity_broken:  'Face changed mid-session'
-  };
-
-  const vfPanel   = document.getElementById('verifyPanel');
-  const vfTrust   = document.getElementById('vfTrust');
-  const vfFill    = document.getElementById('vfTrustFill');
-  const vfBand    = document.getElementById('vfBand');
-  const vfVerdict = document.getElementById('vfVerdict');
-  const vfCh      = document.getElementById('vfChallenge');
-  const vfChText  = document.getElementById('vfChallengeText');
-  const vfChTimer = document.getElementById('vfChallengeTimer');
-  const vfReason  = document.getElementById('vfReason');
-
-  let challengeDeadline = null;   // ms epoch; ticked locally between updates
-  let challengeFlashUntil = 0;    // keep PASS/FAIL visible briefly
-
-  setInterval(() => {             // 4Hz local countdown between server emits
-    const now = Date.now();
-    if (challengeFlashUntil > now) return;           // showing PASS/FAIL flash
-    if (challengeDeadline === null) { vfCh.hidden = true; return; }
-    const left = Math.max(0, Math.ceil((challengeDeadline - now) / 1000));
-    vfChTimer.textContent = left + 's';
-    if (left === 0) challengeDeadline = null;
-  }, 250);
-
-  socket.on('verdict_update', (d) => {
-    // Trust + band + verdict
-    vfPanel.dataset.band = d.trust_band || '';
-    vfTrust.textContent  = (d.trust_score !== undefined && d.trust_score !== null)
-        ? Math.round(d.trust_score) : '—';
-    vfFill.style.width   = Math.max(0, Math.min(100, d.trust_score || 0)) + '%';
-    vfBand.textContent   = (d.trust_band || '—').toUpperCase();
-    vfVerdict.textContent = d.verdict === 'ACCESS GRANTED' ? 'GRANTED'
-                          : d.verdict === 'ACCESS DENIED'  ? 'DENIED' : '—';
-
-    // Hard-deny reasons
-    const reasons = d.hard_deny_reasons || [];
-    if (reasons.length) {
-      vfReason.textContent = reasons.map(r => DENY_LABELS[r] || r).join(' · ');
-      vfReason.hidden = false;
-    } else {
-      vfReason.hidden = true;
+    if (visualConf && vdf && vdf.confidence) {
+        visualConf.style.display = 'inline-block';
+        visualConf.textContent = vdf.confidence;
+        visualConf.className = 'panel-badge badge-' + (vdf.confidence === 'high' ? 'high' : 'low');
+    } else if (visualConf) {
+        visualConf.style.display = 'none';
     }
 
-    // Challenge result flash (PASS/FAIL for 3s, overrides the prompt)
-    if (d.challenge_result) {
-      const passed = !!d.challenge_result.challenge_passed;
-      const type = d.challenge_result.challenge_type || '';
-      vfCh.hidden = false;
-      vfChText.className = 'vf-ch-text ' + (passed ? 'pass' : 'fail');
-      vfChText.textContent = (CHALLENGE_LABELS[type] || type) + ' — ' + (passed ? 'PASSED' : 'FAILED');
-      vfChTimer.textContent = passed ? 'OK' : 'X';
-      challengeFlashUntil = Date.now() + 3000;
-      challengeDeadline = null;
-      setTimeout(() => { if (Date.now() >= challengeFlashUntil) vfCh.hidden = true; }, 3200);
-      return;
+    if (visualFace) {
+        if (!vdf) {
+            visualFace.textContent = 'Awaiting visual deepfake module...';
+            visualFace.style.color = '#8b95b5';
+        } else if (vdf.skipped) {
+            visualFace.textContent = 'Frame skipped (subsampling) — showing last scored value';
+            visualFace.style.color = '#7c88ab';
+        } else {
+            const pct = (vdf.deepfake_probability * 100).toFixed(1);
+            visualFace.textContent = 'Deepfake probability: ' + pct + '%';
+            visualFace.style.color = vdf.deepfake_probability > 0.5 ? '#f2b8b8' : '#8b95b5';
+        }
     }
 
-    // Active challenge prompt + countdown
-    if (d.active_challenge && d.active_challenge.challenge_type) {
-      vfCh.hidden = false;
-      vfChText.className = 'vf-ch-text';
-      vfChText.textContent = CHALLENGE_LABELS[d.active_challenge.challenge_type]
-                             || d.active_challenge.challenge_type;
-      challengeDeadline = Date.now() + (d.active_challenge.remaining_sec || 0) * 1000;
-    } else if (Date.now() >= challengeFlashUntil) {
-      challengeDeadline = null;
-      vfCh.hidden = true;
+    if (visualCascade && vdf && vdf.cascade_stage !== null && vdf.cascade_stage !== undefined) {
+        visualCascade.style.display = 'block';
+        const stageLabel = vdf.cascade_stage === 0 ? 'skipped' : vdf.cascade_stage === 1 ? '1 (texture)' : '2 (EfficientNet)';
+        visualCascade.querySelector('.cascade-tooltip').textContent = stageLabel;
+        if (vdf.latency_ms_avg !== null && vdf.latency_ms_avg !== undefined && vdf.latency_ms_avg > 0) {
+            visualCascade.querySelector('.cascade-tooltip').textContent += ' · ' + vdf.latency_ms_avg + 'ms';
+        }
+    } else if (visualCascade) {
+        visualCascade.style.display = 'none';
     }
-  });
 
-  socket.on('analysis_busy', (d) => {
-    console.warn('[DeepfakeGuard]', d.message);
-    setStatus(d.message, false);
-  });
+    // ── Audio waveform visualiser (Week 3 Day 2) ────
+    const waveCanvas = document.getElementById('audioWaveform');
+    if (waveCanvas) {
+        const ctx = waveCanvas.getContext('2d');
+        const w = waveCanvas.width;
+        const h = waveCanvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = 'var(--bg-tertiary, #1a2236)';
+        ctx.fillRect(0, 0, w, h);
+        // Draw a simulated amplitude waveform (will be replaced with real audio data when connected)
+        const hasAudio = sig.audio_deepfake_score !== null && sig.audio_deepfake_score !== undefined;
+        if (hasAudio) {
+            ctx.strokeStyle = sig.audio_deepfake_score >= 80 ? 'var(--success, #22c97a)' : sig.audio_deepfake_score >= 50 ? 'var(--warning, #f6c842)' : 'var(--danger, #ff5a5a)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (let x = 0; x < w; x++) {
+                const normalized = (sig.audio_deepfake_score || 50) / 100;
+                const amp = (1 - normalized) * (h / 2) * 0.8; // higher spoof = more erratic
+                const y = (h / 2) + Math.sin(x * 0.2 + Date.now() * 0.005) * amp * (0.5 + Math.random() * 0.5);
+                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+    }
 
-  window.addEventListener('beforeunload', () => {
-    socket.emit('analysis_end', { session_id: SESSION_ID });
-  });
+    // ── Modules reporting count ─────────────────
+    const reporting = data.modules_reporting || [];
+    const missingCount = (data.signal_missing || []).length;
+    document.getElementById('sessionIdText').textContent =
+        'Session ID: ' + generateSessionId() +
+        ' · ' + reporting.length + '/4 modules active' +
+        (missingCount > 0 ? ' · ' + missingCount + ' missing' : '');
+}
 
-  document.getElementById('railSession').textContent = 'Room · ' + ROOM;
+// ── Cycle button now sends a test payload ───
+// Useful for demoing without all modules running.
+document.getElementById('cycleBtn').textContent = 'Send test payload to backend →';
+document.getElementById('cycleBtn').addEventListener('click', async () => {
+    const types = ['blink', 'turn_left', 'turn_right'];
+    const prompts = { blink: 'Please blink twice', turn_left: 'Turn your head left', turn_right: 'Turn your head right' };
+    const type = types[Math.floor(Math.random() * types.length)];
+    const passed = Math.random() > 0.35;
+    const failReasons = ['timeout', 'wrong_direction', 'spoof_detected', 'multiple_faces_detected'];
 
-  function setStatus(text, live) {
-    document.getElementById('statusText').textContent = text;
-    document.getElementById('statusDot').className = 'dot ' + (live ? 'live' : 'off');
-  }
+    const visionPayload = {
+        module: "vision",
+        session_id: "demo_test_" + Date.now(),
+        timestamp: Date.now(),
+        payload: {
+            challenge_type: type,
+            prompt: prompts[type],
+            timeout_sec: 5.0,
+            challenge_passed: passed,
+            fail_reason: passed ? null : failReasons[Math.floor(Math.random() * failReasons.length)],
+            metrics: {
+                response_time_ms: Math.round(400 + Math.random() * 2000),
+                blink_count_detected: type === 'blink' ? 1 : 0,
+                avg_texture_score: Math.round(50 + Math.random() * 50),
+                max_yaw_deviation: Math.round((Math.random() - 0.5) * 40)
+            }
+        }
+    };
 
-  async function start() {
+    // Randomly land in match / mismatch / uncertain zone, mirroring
+    // M3's three confirmed example payloads.
+    const similarity = Math.random();
+    let confidence, verdict;
+    if (similarity >= 0.60) { confidence = 'high'; verdict = 'REAL'; }
+    else if (similarity >= 0.50) { confidence = 'low'; verdict = 'FAKE'; }
+    else { confidence = 'none'; verdict = 'FAKE'; }
+
+    const identityPayload = {
+        module: "identity",
+        session_id: "demo_test_" + Date.now(),
+        timestamp: new Date().toISOString(),
+        face_detected: true,
+        multiple_faces_detected: Math.random() < 0.08,
+        identity_score: Math.round(similarity * 100),
+        similarity_score: Number(similarity.toFixed(3)),
+        threshold_used: 0.6,
+        confidence: confidence,
+        verdict: verdict
+    };
+
+    try {
+        await fetch('/score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(visionPayload)
+        });
+        await fetch('/score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(identityPayload)
+        });
+    } catch (err) {
+        console.error('Test payload send failed:', err);
+    }
+});
+
+// ── Audio waveform animation loop (Week 3 Day 2) ────
+(function animateWaveform(){
+    const canvas = document.getElementById('audioWaveform');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg-tertiary') || '#1a2236';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#3a4468';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = 0; x < w; x++) {
+            const y = (h / 2) + Math.sin(x * 0.15 + Date.now() * 0.003) * (h / 6) * (0.6 + Math.random() * 0.4);
+            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+    requestAnimationFrame(animateWaveform);
+})();
+
+// ── Boot sequence ───────────────────────────
+updateViewportLabel();
+document.getElementById('sessionIdText').textContent = 'Session ID: ' + generateSessionId();
+async function bootVerifier(){
     await window.requestConsent();
-    window.onConsentRetry = start;
+    window.onConsentRetry = bootVerifier;
+    joinAsVerifier();
+}
+bootVerifier();
 
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      document.getElementById('localPreview').srcObject = localStream;
-      startAnalysisStream();   // Faza 1: begin feeding the analysis engine
-    } catch (err) {
-      console.error('getUserMedia failed:', err);
-      setStatus('Camera or microphone unavailable', false);
-      window.showConsentError();
-      return;
+// ── Attack / Legit deterministic demo simulators ───
+// Unlike the random cycleBtn payloads, these are FIXED so the live
+// demo is 100% predictable: attack always tanks the score hard,
+// legit always brings it back to a clean "Trusted" state.
+async function postScore(payload) {
+    await fetch('/score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+}
+
+async function simulateAttack() {
+    const sid = "attack_demo_" + Date.now();
+    const ts = Date.now();
+
+    await postScore({
+        module: "vision", session_id: sid, timestamp: ts,
+        payload: {
+            challenge_type: "blink_twice", prompt: "Please blink twice",
+            timeout_sec: 5.0, challenge_passed: false, fail_reason: "spoof_detected",
+            metrics: { response_time_ms: 4200, blink_count_detected: 0, avg_texture_score: 22, max_yaw_deviation: 3 }
+        }
+    });
+
+    await postScore({
+        module: "identity", session_id: sid, timestamp: new Date().toISOString(),
+        face_detected: true, multiple_faces_detected: true,
+        identity_score: 22, similarity_score: 0.22, threshold_used: 0.6,
+        confidence: "none", verdict: "FAKE"
+    });
+
+    await postScore({
+        module: "visual_deepfake", session_id: sid, timestamp: ts,
+        deepfake_probability: 0.94, confidence: "high", skipped: false
+    });
+
+    await postScore({
+        module: "audio", session_id: sid, timestamp: ts,
+        voice_detected: true, audio_deepfake_score: 18, verdict: "FAKE"
+    });
+
+    await postScore({
+        module: "security", session_id: sid, timestamp: ts,
+        virtual_camera_detected: true, injection_risk_score: 12,
+        frame_timing_anomaly_score: 15, verdict: "FAKE"
+    });
+}
+
+async function simulateLegit() {
+    const sid = "legit_demo_" + Date.now();
+    const ts = Date.now();
+
+    await postScore({
+        module: "vision", session_id: sid, timestamp: ts,
+        payload: {
+            challenge_type: "turn_left", prompt: "Turn your head left",
+            timeout_sec: 5.0, challenge_passed: true, fail_reason: null,
+            metrics: { response_time_ms: 900, blink_count_detected: 0, avg_texture_score: 92, max_yaw_deviation: 28 }
+        }
+    });
+
+    await postScore({
+        module: "identity", session_id: sid, timestamp: new Date().toISOString(),
+        face_detected: true, multiple_faces_detected: false,
+        identity_score: 95, similarity_score: 0.95, threshold_used: 0.6,
+        confidence: "high", verdict: "REAL"
+    });
+
+    await postScore({
+        module: "visual_deepfake", session_id: sid, timestamp: ts,
+        deepfake_probability: 0.03, confidence: "high", skipped: false
+    });
+
+    await postScore({
+        module: "audio", session_id: sid, timestamp: ts,
+        voice_detected: true, audio_deepfake_score: 93, verdict: "REAL"
+    });
+
+    await postScore({
+        module: "security", session_id: sid, timestamp: ts,
+        virtual_camera_detected: false, injection_risk_score: 90,
+        frame_timing_anomaly_score: 88, verdict: "REAL"
+    });
+}
+
+document.getElementById('attackBtn').addEventListener('click', simulateAttack);
+document.getElementById('legitBtn').addEventListener('click', simulateLegit);
+
+// ── Faza 2: demo-mode gate ─────────────────────────────────────
+// The three simulator buttons POST fake payloads into the SAME
+// latest_scores store the live engine feeds. During a real public
+// session one accidental click would corrupt the live verdict, so
+// they are hidden unless the dashboard is opened with ?demo=1.
+(function () {
+    const demoMode = new URLSearchParams(window.location.search).get('demo') === '1';
+    if (!demoMode) {
+        ['cycleBtn', 'attackBtn', 'legitBtn'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+    } else {
+        ['attackBtn', 'legitBtn'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent += ' (SIMULATED)';
+        });
     }
+})();
 
-    pc = new RTCPeerConnection(config);
-    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
-    // No ontrack handler — this page does not render any incoming remote
-    // stream. It only sends. (If the verifier side ever needs a two-way
-    // call, that belongs in a different page, not here — this page's
-    // contract is sender-only for WebRTC, while the preview above is just
-    // a local mirror of its own camera.)
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('ice-candidate', { room: ROOM, candidate: event.candidate });
-      }
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') setStatus('Streaming to verifier', true);
-      else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) setStatus('Disconnected', false);
-    };
-
-    socket.emit('join', { room: ROOM, role: 'participant' });
-    setStatus('Waiting for verifier to join', false);
-  }
-
-  socket.on('peer-joined', () => {
-    // participant.html never initiates the offer — it waits for the
-    // verifier (index.html) to send one. This removes the race where both
-    // sides tried to create an offer depending on who joined first.
-    setStatus('Verifier joined — awaiting offer', false);
-  });
-
-  socket.on('offer', async (data) => {
-    await pc.setRemoteDescription(data.sdp);
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    socket.emit('answer', { room: ROOM, sdp: answer });
-  });
-
-  socket.on('answer', async (data) => {
-    await pc.setRemoteDescription(data.sdp);
-  });
-
-  socket.on('ice-candidate', async (data) => {
-    try {
-      await pc.addIceCandidate(data.candidate);
-    } catch (err) {
-      console.error("ICE candidate error:", err);
-    }
-  });
-
-  start();
+setInterval(fetchLiveScores, 1500);  // poll every 1.5 seconds
+fetchLiveScores();                   // also fire immediately on load
 </script>
 </body>
 </html>

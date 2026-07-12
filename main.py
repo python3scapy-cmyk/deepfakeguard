@@ -979,6 +979,10 @@ if __name__ == "__main__":
                         help="SigLIP median score (0-1) at/above which the banner says AI DETECTED (default 0.60)")
     parser.add_argument("--human-threshold", type=float, default=0.35,
                         help="SigLIP median score (0-1) at/below which the banner says HUMAN (default 0.35)")
+    parser.add_argument("--ensemble", action="store_true",
+                        help="Load a second deepfake checkpoint and average both models "
+                             "(+TTA). Slower per inference (background thread absorbs it), "
+                             "noticeably fewer false AI verdicts on webcam frames.")
     parser.add_argument("--flip-deepfake-labels", action="store_true",
                         help="Swap which softmax index counts as 'fake' -- try this if HUMAN/AI results "
                              "look inverted (watch the [DEEPFAKE] p(fake_idx0)/p(real_idx1) debug line)")
@@ -988,4 +992,11 @@ if __name__ == "__main__":
     system.ai_threshold = args.ai_threshold
     system.human_threshold = args.human_threshold
     system.deepfake_detector.flip_labels = args.flip_deepfake_labels
+    if args.ensemble:
+        # Rebuild the detector with the second checkpoint. Done here (not a
+        # flag into __init__ at line ~353) so the default startup stays fast
+        # when the flag is off.
+        from vision.deepfake_detector import DeepfakeDetector as _DFD
+        system.deepfake_detector = _DFD(ensemble=True,
+                                        flip_labels=args.flip_deepfake_labels)
     system.run()

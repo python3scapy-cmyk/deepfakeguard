@@ -28,6 +28,10 @@ import cv2
 import numpy as np
 
 DEFAULT_MODEL_NAME = "prithivMLmods/deepfake-detector-model-v1"
+# Optional second opinion for ensemble mode (ViT fine-tuned on a different
+# deepfake corpus). Averaging two ARCHITECTURES is the strongest cheap fix
+# for single-model false positives on webcam JPEG frames.
+ENSEMBLE_MODEL_NAME = "dima806/deepfake_vs_real_image_detection"
 # This model's label space: 0 = fake, 1 = real (confirmed on the model card).
 FAKE_LABEL_INDEX = 0
 REAL_LABEL_INDEX = 1
@@ -35,7 +39,8 @@ REAL_LABEL_INDEX = 1
 
 class DeepfakeDetector:
     def __init__(self, model_path=None, device="cpu",
-                 hf_model_name=DEFAULT_MODEL_NAME, flip_labels=False):
+                 hf_model_name=DEFAULT_MODEL_NAME, flip_labels=False,
+                 ensemble=False):
         self.device = device
         # If real AI/fake content is consistently coming out as HUMAN (or
         # vice versa), the model card's documented label order (0=fake,
@@ -68,7 +73,8 @@ class DeepfakeDetector:
         self.stage2_window = deque(maxlen=8)
         self.model = None
         self.processor = None
-        # "siglip_hf", "efficientnet_local", or None (mock)
+        self.models = []  # [(name, model, processor, fake_label_idx), ...]
+        # "siglip_hf", "ensemble_xN", "efficientnet_local", or None (mock)
         self.backend = None
         bundled = os.path.join(
     getattr(
@@ -106,21 +112,49 @@ class DeepfakeDetector:
     f"[WARNING] Could not load local EfficientNet checkpoint: {e}")
                 self.model = None
 
-        # Priority 2: real pretrained deepfake classifier from Hugging Face
-        # (auto-downloads on first run, cached under ~/.cache/huggingface after).
+        # Priority 2: real pretrained deepfake classifier(s) from Hugging
+        # Face (auto-download on first run, cached afterwards). Each
+        # checkpoint's fake-label index is read from its OWN config
+        # (id2label), so adding/swapping checkpoints can't silently invert
+        # REAL/FAKE; --flip-deepfake-labels still overrides per run.
         try:
-            import torch
-            from transformers import AutoImageProcessor, SiglipForImageClassification
-            print(
-    f"[INFO] Loading deepfake classifier '{hf_model_name}' (first run downloads ~370MB)...")
-            self.processor = AutoImageProcessor.from_pretrained(hf_model_name)
-            self.model = SiglipForImageClassification.from_pretrained(
-                hf_model_name)
-            self.model.to(device)
-            self.model.eval()
-            self.backend = "siglip_hf"
-            print(
-                "[INFO] Real deepfake classifier loaded (SigLIP2, prithivMLmods/deepfake-detector-model-v1)")
+            import torch  # noqa: F401 - verified importable before loading
+            from transformers import AutoImageProcessor, AutoModelForImageClassification
+
+            checkpoints = [hf_model_name]
+            if ensemble:
+                checkpoints.append(ENSEMBLE_MODEL_NAME)
+
+            for ck in checkpoints:
+                try:
+                    print(f"[INFO] Loading deepfake classifier '{ck}' "
+                          f"(first run downloads weights)...")
+                    proc = AutoImageProcessor.from_pretrained(ck)
+                    mdl = AutoModelForImageClassification.from_pretrained(ck)
+                    mdl.to(device)
+                    mdl.eval()
+                    id2label = getattr(mdl.config, "id2label", {}) or {}
+                    fake_idx = None
+                    for i, lbl in id2label.items():
+                        if "fake" in str(lbl).lower():
+                            fake_idx = int(i)
+                            break
+                    if fake_idx is None:
+                        fake_idx = FAKE_LABEL_INDEX
+                    if self.flip_labels:
+                        fake_idx = 1 - fake_idx
+                    self.models.append((ck, mdl, proc, fake_idx))
+                    print(f"[INFO] Loaded '{ck}' (fake label index {fake_idx})")
+                except Exception as e:
+                    print(f"[WARNING] Could not load checkpoint '{ck}': {e}")
+
+            if self.models:
+                self.model, self.processor = self.models[0][1], self.models[0][2]
+                self.backend = ("siglip_hf" if len(self.models) == 1
+                                else "ensemble_x{}".format(len(self.models)))
+                print(f"[INFO] Deepfake backend ready: {self.backend}")
+            else:
+                raise RuntimeError("no HF checkpoint could be loaded")
         except Exception as e:
             print(
     f"[WARNING] Could not load real deepfake classifier ({e}) -> using mock Stage-2 detector")
@@ -158,48 +192,64 @@ class DeepfakeDetector:
             print(f"[ERROR] EfficientNet inference failed: {e}")
             return 0.5
 
-    def _stage2_siglip(self, face_crop):
+    def _stage2_hf(self, face_crop):
+        """Score with EVERY loaded HF checkpoint, on the original AND the
+        horizontally-flipped crop (test-time augmentation), and average.
+        TTA + cross-architecture averaging is the cheap, reliable way to
+        smooth out the single-frame false positives that webcam JPEG noise
+        and lighting produce with any single model."""
         try:
             import torch
             from PIL import Image
             rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb)
-            inputs = self.processor(images=pil_image, return_tensors="pt")
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            variants = [Image.fromarray(rgb),
+                        Image.fromarray(rgb[:, ::-1].copy())]
+            per_model = []
             with torch.no_grad():
-                outputs = self.model(**inputs)
-                probs = torch.nn.functional.softmax(
-                    outputs.logits, dim=1).squeeze()
-                fake_idx = REAL_LABEL_INDEX if self.flip_labels else FAKE_LABEL_INDEX
-                deepfake_probability = float(probs[fake_idx].item())
-                # Debug visibility: print the raw scores for BOTH classes,
-                # throttled to ~1/sec, so a mislabeled checkpoint (e.g. the
-                # model card's 0=fake/1=real turning out to be backwards
-                # for this specific one) is immediately visible instead of
-                # silently producing wrong HUMAN/AI verdicts. If you show a
-                # known-AI image and p(fake) stays low while p(real) stays
-                # high, that's the model saying "real" -- try
-                # --flip-deepfake-labels to swap which index counts as fake.
-                now = time.time()
-                if now - self._last_debug_print > 1.0:
-                    print(f"[DEEPFAKE] p(fake_idx0)={float(probs[FAKE_LABEL_INDEX]):.3f} "
-                          f"p(real_idx1)={float(probs[REAL_LABEL_INDEX]):.3f} "
-                          f"using_idx={fake_idx} flip_labels={self.flip_labels}")
-                    self._last_debug_print = now
-            return deepfake_probability
+                for name, mdl, proc, fake_idx in self.models:
+                    vals = []
+                    for img in variants:
+                        inputs = proc(images=img, return_tensors="pt")
+                        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                        out = mdl(**inputs)
+                        pr = torch.nn.functional.softmax(out.logits, dim=1).squeeze()
+                        vals.append(float(pr[fake_idx].item()))
+                    per_model.append((name, float(np.mean(vals))))
+            prob = float(np.mean([v for _n, v in per_model]))
+
+            # Throttled debug line: raw per-model probabilities, so a
+            # mislabeled/underperforming checkpoint is visible immediately
+            # instead of silently skewing the HUMAN/AI verdict.
+            now = time.time()
+            if now - self._last_debug_print > 1.0:
+                detail = "  ".join(f"{n.split('/')[-1]}={v:.3f}" for n, v in per_model)
+                print(f"[DEEPFAKE] p(fake)={prob:.3f}  [{detail}] "
+                      f"flip_labels={self.flip_labels}")
+                self._last_debug_print = now
+            return prob
         except Exception as e:
-            print(f"[ERROR] SigLIP deepfake inference failed: {e}")
+            print(f"[ERROR] HF deepfake inference failed: {e}")
             return 0.5
 
     def _stage2_infer(self, face_crop):
-        if self.backend == "siglip_hf":
-            return self._stage2_siglip(face_crop)
+        if self.models:
+            return self._stage2_hf(face_crop)
         if self.backend == "efficientnet_local":
             return self._stage2_efficientnet(face_crop)
         # No real model loaded -> mock, clearly labeled as such in the output
         # payload.
         return float(np.random.uniform(0.1, 0.4))
 
+    def _crop_with_margin(self, frame, box, margin=0.25):
+        """Expand the face box by `margin` on every side before cropping.
+        These classifiers were fine-tuned on loosely-framed face images; a
+        tight eyebrows-to-chin crop measurably shifts them toward random."""
+        x, y, w, h = box
+        H, W = frame.shape[:2]
+        mx, my = int(w * margin), int(h * margin)
+        x0, y0 = max(0, x - mx), max(0, y - my)
+        x1, y1 = min(W, x + w + mx), min(H, y + h + my)
+        return frame[y0:y1, x0:x1]
 
     def analyze_single_frame(self, frame_bgr):
         """One-shot scoring for offline (uploaded photo/video) analysis --
@@ -209,8 +259,7 @@ class DeepfakeDetector:
         faces = self._detect_face(frame_bgr)
         if faces is None or len(faces) == 0:
             return {"face_found": False, "deepfake_probability": None}
-        x, y, w, h = faces[0]
-        face_crop = frame_bgr[y:y + h, x:x + w]
+        face_crop = self._crop_with_margin(frame_bgr, faces[0])
         prob = self._stage2_infer(face_crop)
         return {"face_found": True, "deepfake_probability": float(prob)}
 
@@ -304,9 +353,7 @@ class DeepfakeDetector:
             self.window.append(stage1)
             return self._build_output(stage1, 1, (time.time() - start) * 1000)
 
-        x, y, w, h = faces[0]
-        x, y = max(0, x), max(0, y)
-        face_crop = frame_bgr[y:y + h, x:x + w]
+        face_crop = self._crop_with_margin(frame_bgr, faces[0])
         if face_crop.size == 0:
             self.window.append(stage1)
             return self._build_output(stage1, 1, (time.time() - start) * 1000)

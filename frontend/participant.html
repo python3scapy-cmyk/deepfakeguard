@@ -192,6 +192,59 @@
     text-transform:uppercase;color:var(--ink-mute);text-align:right;
   }
 
+  /* ── verification readout (Faza 2: live backend verdict) ── */
+  .verify{
+    width:100%;max-width:560px;margin-top:14px;
+    background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;
+  }
+  .vf-row{display:grid;grid-template-columns:1.1fr .9fr 1.4fr;}
+  .vf-cell{padding:12px 10px 11px;text-align:center;border-right:1px solid var(--line-soft);}
+  .vf-cell:last-child{border-right:none;}
+  .vf-k{
+    font-family:var(--mono);font-size:9px;font-weight:500;
+    letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-mute);
+    margin-bottom:7px;
+  }
+  .vf-v{
+    font-family:var(--mono);font-size:15px;font-weight:700;
+    font-variant-numeric:tabular-nums;color:var(--ink-dim);
+    line-height:1;transition:color .3s;
+  }
+  .verify[data-band="trusted"]    .vf-v{color:var(--mint);}
+  .verify[data-band="suspicious"] .vf-v{color:var(--amber);}
+  .verify[data-band="fraud"]      .vf-v{color:var(--rose);}
+  .vf-trustbar{height:3px;border-radius:2px;background:var(--line);overflow:hidden;margin-top:7px;}
+  .vf-trustfill{
+    height:100%;width:0%;border-radius:2px;background:var(--ink-mute);
+    transition:width .4s ease,background .3s;
+  }
+  .verify[data-band="trusted"]    .vf-trustfill{background:var(--mint);}
+  .verify[data-band="suspicious"] .vf-trustfill{background:var(--amber);}
+  .verify[data-band="fraud"]      .vf-trustfill{background:var(--rose);}
+
+  .vf-challenge{
+    display:flex;align-items:center;gap:10px;
+    padding:10px 14px;border-top:1px solid var(--line-soft);
+    font-family:var(--mono);font-size:11px;letter-spacing:.8px;
+    text-transform:uppercase;
+  }
+  .vf-challenge[hidden]{display:none;}
+  .vf-ch-label{color:var(--ink-mute);font-size:9px;letter-spacing:1.4px;}
+  .vf-ch-text{color:var(--indigo);font-weight:700;flex:1;}
+  .vf-ch-text.pass{color:var(--mint);}
+  .vf-ch-text.fail{color:var(--rose);}
+  .vf-ch-timer{
+    color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums;
+    padding:2px 8px;border:1px solid var(--line);border-radius:6px;
+  }
+  .vf-reason{
+    padding:9px 14px;border-top:1px solid var(--line-soft);
+    font-family:var(--mono);font-size:10px;letter-spacing:.6px;
+    text-transform:uppercase;color:var(--rose);
+  }
+  .vf-reason[hidden]{display:none;}
+
   @media (max-width:560px){
     .head h1{font-size:20px;}
     .telemetry{grid-template-columns:repeat(2,1fr);}
@@ -429,6 +482,32 @@
     <div class="tel-v" id="vStable">—</div>
     <div class="tel-bar"><div class="tel-fill" id="fStable"></div></div>
   </div>
+</div>
+
+<!-- Faza 2: live verification readout — fed by 'verdict_update' from the
+     backend AnalysisEngine. Same ledger styling as the telemetry strip. -->
+<div class="verify" id="verifyPanel" data-band="">
+  <div class="vf-row">
+    <div class="vf-cell">
+      <div class="vf-k">Trust</div>
+      <div class="vf-v" id="vfTrust">&mdash;</div>
+      <div class="vf-trustbar"><div class="vf-trustfill" id="vfTrustFill"></div></div>
+    </div>
+    <div class="vf-cell">
+      <div class="vf-k">Band</div>
+      <div class="vf-v" id="vfBand">&mdash;</div>
+    </div>
+    <div class="vf-cell">
+      <div class="vf-k">Verdict</div>
+      <div class="vf-v" id="vfVerdict">Awaiting</div>
+    </div>
+  </div>
+  <div class="vf-challenge" id="vfChallenge" hidden>
+    <span class="vf-ch-label">Liveness</span>
+    <span class="vf-ch-text" id="vfChallengeText">&mdash;</span>
+    <span class="vf-ch-timer" id="vfChallengeTimer">&mdash;</span>
+  </div>
+  <div class="vf-reason" id="vfReason" hidden></div>
 </div>
 
 <div id="status">
@@ -891,11 +970,135 @@
      ═══════════════════════════════════════════════════════════ -->
 <script>
   const ROOM = "demo-room";
-  const socket = io(window.location.hostname === 'localhost'
-    ? 'http://localhost:5000'
-    : `http://${window.location.hostname}:5000`);
+  // Same-origin socket: works on localhost:5000 AND through the HTTPS
+  // cloudflared tunnel (the old hostname:5000 fallback broke tunneling).
+  const socket = io();
   const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
   let pc, localStream;
+
+  /* ── Faza 1: analysis frame stream ─────────────────────────────
+     Sends ~5 JPEG frames/sec to the backend's in-process
+     AnalysisEngine over the SAME socket used for WebRTC signaling.
+     Completely independent of the WebRTC peer connection — the
+     dashboard video and the analysis pipeline never block each other. */
+  const SESSION_ID = 'web_' + Math.random().toString(16).slice(2, 10);
+  // 10fps: a blink lasts ~150-300ms. At 5fps (200ms/frame) a whole blink
+  // can fall BETWEEN two frames and the blink_twice challenge times out
+  // even when the user obeys. 10fps guarantees 1-3 frames per blink.
+  const ANALYSIS_FPS = 10;
+  const analysisCanvas = document.createElement('canvas');
+  analysisCanvas.width = 480; analysisCanvas.height = 360;
+  const analysisCtx = analysisCanvas.getContext('2d');
+  let analysisTimer = null;
+
+  function startAnalysisStream() {
+    const videoEl = document.getElementById('localPreview');
+    if (analysisTimer) clearInterval(analysisTimer);
+    // Mirror the analysis frame. main.py always ran the liveness engine on
+    // cv2.flip'ed frames, so turn_left/turn_right yaw signs are calibrated
+    // to the MIRRORED view. Sending raw frames would invert directions and
+    // make every turn challenge fail even when the user obeys the prompt.
+    analysisCtx.setTransform(-1, 0, 0, 1, analysisCanvas.width, 0);
+    analysisTimer = setInterval(() => {
+      if (!localStream || videoEl.readyState < 2) return;
+      analysisCtx.drawImage(videoEl, 0, 0, analysisCanvas.width, analysisCanvas.height);
+      socket.emit('analysis_frame', {
+        session_id: SESSION_ID,
+        jpg: analysisCanvas.toDataURL('image/jpeg', 0.7)
+      });
+    }, 1000 / ANALYSIS_FPS);
+  }
+
+  /* ── Faza 2: render backend verdicts into the readout panel ── */
+  const CHALLENGE_LABELS = {
+    blink_twice: 'Blink twice',
+    turn_left:   'Turn your head LEFT',
+    turn_right:  'Turn your head RIGHT'
+  };
+  const DENY_LABELS = {
+    no_face_detected:            'No face detected',
+    multiple_faces:              'Multiple faces in frame',
+    '2d_spoof_detected_sustained': 'Spoof detected (screen/photo)',
+    virtual_camera_detected:     'Virtual camera detected',
+    identity_continuity_broken:  'Face changed mid-session'
+  };
+
+  const vfPanel   = document.getElementById('verifyPanel');
+  const vfTrust   = document.getElementById('vfTrust');
+  const vfFill    = document.getElementById('vfTrustFill');
+  const vfBand    = document.getElementById('vfBand');
+  const vfVerdict = document.getElementById('vfVerdict');
+  const vfCh      = document.getElementById('vfChallenge');
+  const vfChText  = document.getElementById('vfChallengeText');
+  const vfChTimer = document.getElementById('vfChallengeTimer');
+  const vfReason  = document.getElementById('vfReason');
+
+  let challengeDeadline = null;   // ms epoch; ticked locally between updates
+  let challengeFlashUntil = 0;    // keep PASS/FAIL visible briefly
+
+  setInterval(() => {             // 4Hz local countdown between server emits
+    const now = Date.now();
+    if (challengeFlashUntil > now) return;           // showing PASS/FAIL flash
+    if (challengeDeadline === null) { vfCh.hidden = true; return; }
+    const left = Math.max(0, Math.ceil((challengeDeadline - now) / 1000));
+    vfChTimer.textContent = left + 's';
+    if (left === 0) challengeDeadline = null;
+  }, 250);
+
+  socket.on('verdict_update', (d) => {
+    // Trust + band + verdict
+    vfPanel.dataset.band = d.trust_band || '';
+    vfTrust.textContent  = (d.trust_score !== undefined && d.trust_score !== null)
+        ? Math.round(d.trust_score) : '—';
+    vfFill.style.width   = Math.max(0, Math.min(100, d.trust_score || 0)) + '%';
+    vfBand.textContent   = (d.trust_band || '—').toUpperCase();
+    vfVerdict.textContent = d.verdict === 'ACCESS GRANTED' ? 'GRANTED'
+                          : d.verdict === 'ACCESS DENIED'  ? 'DENIED' : '—';
+
+    // Hard-deny reasons
+    const reasons = d.hard_deny_reasons || [];
+    if (reasons.length) {
+      vfReason.textContent = reasons.map(r => DENY_LABELS[r] || r).join(' · ');
+      vfReason.hidden = false;
+    } else {
+      vfReason.hidden = true;
+    }
+
+    // Challenge result flash (PASS/FAIL for 3s, overrides the prompt)
+    if (d.challenge_result) {
+      const passed = !!d.challenge_result.challenge_passed;
+      const type = d.challenge_result.challenge_type || '';
+      vfCh.hidden = false;
+      vfChText.className = 'vf-ch-text ' + (passed ? 'pass' : 'fail');
+      vfChText.textContent = (CHALLENGE_LABELS[type] || type) + ' — ' + (passed ? 'PASSED' : 'FAILED');
+      vfChTimer.textContent = passed ? 'OK' : 'X';
+      challengeFlashUntil = Date.now() + 3000;
+      challengeDeadline = null;
+      setTimeout(() => { if (Date.now() >= challengeFlashUntil) vfCh.hidden = true; }, 3200);
+      return;
+    }
+
+    // Active challenge prompt + countdown
+    if (d.active_challenge && d.active_challenge.challenge_type) {
+      vfCh.hidden = false;
+      vfChText.className = 'vf-ch-text';
+      vfChText.textContent = CHALLENGE_LABELS[d.active_challenge.challenge_type]
+                             || d.active_challenge.challenge_type;
+      challengeDeadline = Date.now() + (d.active_challenge.remaining_sec || 0) * 1000;
+    } else if (Date.now() >= challengeFlashUntil) {
+      challengeDeadline = null;
+      vfCh.hidden = true;
+    }
+  });
+
+  socket.on('analysis_busy', (d) => {
+    console.warn('[DeepfakeGuard]', d.message);
+    setStatus(d.message, false);
+  });
+
+  window.addEventListener('beforeunload', () => {
+    socket.emit('analysis_end', { session_id: SESSION_ID });
+  });
 
   document.getElementById('railSession').textContent = 'Room · ' + ROOM;
 
@@ -911,6 +1114,7 @@
     try {
       localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       document.getElementById('localPreview').srcObject = localStream;
+      startAnalysisStream();   // Faza 1: begin feeding the analysis engine
     } catch (err) {
       console.error('getUserMedia failed:', err);
       setStatus('Camera or microphone unavailable', false);
