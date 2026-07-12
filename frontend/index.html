@@ -172,6 +172,85 @@
     </style>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
+<script>
+(function(){
+    const dropZone = document.getElementById('uploadDropZone');
+    const fileInput = document.getElementById('uploadFileInput');
+    const fileNameEl = document.getElementById('uploadFileName');
+    const analyzeBtn = document.getElementById('uploadAnalyzeBtn');
+    const resultsEl = document.getElementById('uploadResults');
+    const filmstripEl = document.getElementById('uploadFilmstrip');
+    const bannerEl = document.getElementById('uploadVerdictBanner');
+    const verdictTextEl = document.getElementById('uploadVerdictText');
+    const verdictIconEl = document.getElementById('uploadVerdictIcon');
+    let selectedFile = null;
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = 'var(--accent)'; });
+    dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = 'var(--border)'; });
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'var(--border)';
+        if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files.length) setFile(fileInput.files[0]); });
+
+    function setFile(file) {
+        selectedFile = file;
+        fileNameEl.textContent = file.name;
+        analyzeBtn.disabled = false;
+        analyzeBtn.style.opacity = '1';
+    }
+
+    analyzeBtn.addEventListener('click', async () => {
+        if (!selectedFile) return;
+        analyzeBtn.disabled = true;
+        analyzeBtn.textContent = 'Analyzing...';
+        resultsEl.style.display = 'none';
+
+        const form = new FormData();
+        form.append('media', selectedFile);
+
+        try {
+            const res = await fetch('http://localhost:5000/analyze-upload', { method: 'POST', body: form });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'analysis failed');
+            renderUploadResults(data);
+        } catch (err) {
+            verdictTextEl.textContent = 'Analysis failed: ' + err.message;
+            bannerEl.style.background = 'var(--danger-bg)';
+            bannerEl.style.color = 'var(--danger)';
+            filmstripEl.innerHTML = '';
+            resultsEl.style.display = 'block';
+        } finally {
+            analyzeBtn.disabled = false;
+            analyzeBtn.textContent = 'Analyze';
+        }
+    });
+
+    function renderUploadResults(data) {
+        filmstripEl.innerHTML = (data.frames || []).map(f => {
+            const border = !f.face_found ? '#5a6484' : (f.deepfake_probability > 0.5 ? 'var(--danger)' : 'var(--success)');
+            const img = f.thumbnail ? '<img src="' + f.thumbnail + '" style="width:72px;height:72px;object-fit:cover;border-radius:6px;display:block;">' : '';
+            return '<div style="border:2px solid ' + border + ';border-radius:8px;flex-shrink:0;">' + img + '</div>';
+        }).join('');
+
+        if (data.verdict === 'NO_FACE') {
+            verdictTextEl.textContent = 'No face detected in uploaded media';
+            bannerEl.style.background = 'var(--bg-tertiary)';
+            bannerEl.style.color = 'var(--text-muted)';
+            verdictIconEl.textContent = '';
+        } else {
+            const isFake = data.verdict === 'FAKE';
+            verdictTextEl.textContent = 'Result: ' + data.verdict + ' (' + data.confidence_pct + '% confidence)';
+            bannerEl.style.background = isFake ? 'var(--danger-bg)' : 'var(--success-bg)';
+            bannerEl.style.color = isFake ? 'var(--danger)' : 'var(--success)';
+            verdictIconEl.textContent = isFake ? '👎' : '👍';
+        }
+        resultsEl.style.display = 'block';
+    }
+})();
+</script>
 <body>
 <!-- ===== Consent Acknowledgment Modal (Day 2) ===== -->
 <div id="consentOverlay" role="dialog" aria-modal="true" aria-labelledby="consentTitle" style="
@@ -536,6 +615,32 @@
             <div style="color:#5a6484;">No events yet — session log will populate as verification signals arrive.</div>
         </div>
     </div>
+    <div class="upload-panel" style="
+    margin-top: 16px; background: var(--bg-card); border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light); padding: 18px; box-shadow: var(--shadow-sm);
+">
+    <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);margin:0 0 14px;">
+        Upload &amp; Analyze <span style="font-weight:400;color:#5a6484;">&middot; non-live photo or video check</span>
+    </h3>
+
+    <div id="uploadDropZone" style="border:1px dashed var(--border);border-radius:var(--radius-sm);padding:24px;text-align:center;cursor:pointer;">
+        <input type="file" id="uploadFileInput" accept="image/*,video/*" style="display:none;">
+        <div style="color:var(--text-muted);font-size:13px;">
+            Drop a photo or video here, or <span style="color:var(--accent);font-weight:600;">browse</span>
+        </div>
+        <div id="uploadFileName" style="margin-top:6px;font-size:12px;color:var(--text-secondary);"></div>
+    </div>
+
+    <button id="uploadAnalyzeBtn" disabled style="margin-top:12px;width:100%;padding:10px;border:none;border-radius:var(--radius-sm);background:var(--accent);color:white;font-weight:600;font-size:13px;cursor:pointer;opacity:.5;">Analyze</button>
+
+    <div id="uploadResults" style="margin-top:16px;display:none;">
+        <div id="uploadFilmstrip" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;"></div>
+        <div id="uploadVerdictBanner" style="margin-top:12px;padding:14px 18px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:space-between;font-weight:700;">
+            <span id="uploadVerdictText"></span>
+            <span id="uploadVerdictIcon" style="font-size:20px;"></span>
+        </div>
+    </div>
+</div>
 </main>
 <div class="device-indicator" id="deviceIndicator">Viewport &middot; Desktop</div>
 <script>

@@ -2,8 +2,16 @@ from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 from datetime import datetime, timezone
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import time
-
+import base64
+import tempfile
+import cv2
+import numpy as np
+from werkzeug.utils import secure_filename
+from vision.deepfake_detector import DeepfakeDetector
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 CORS(app)  # allows cross-origin HTTP requests from the dashboard
@@ -59,6 +67,12 @@ _last_trust_band = None
 _ema_trust_score = None
 EMA_ALPHA = 0.3
 
+app.config['MAX_CONTENT_LENGTH'] = 150 * 1024 * 1024  # 150MB cap on uploads
+upload_detector = DeepfakeDetector()
+
+ALLOWED_VIDEO_EXT = {"mp4", "mov", "avi", "webm", "mkv"}
+ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "bmp"}
+MAX_UPLOAD_FRAMES = 20  # mirrors the "Sequence Length" slider in your reference demo
 
 def log_event(event_type, detail, band=None):
     session_log.append({
@@ -464,6 +478,97 @@ def get_missing_signals():
             missing.append(module)
     return missing
 
+def _allowed_file(filename):
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return (ext in ALLOWED_VIDEO_EXT or ext in ALLOWED_IMAGE_EXT), ext
+
+
+def _frame_to_thumbnail_b64(frame, max_dim=160):
+    h, w = frame.shape[:2]
+    scale = max_dim / max(h, w)
+    small = cv2.resize(frame, (int(w * scale), int(h * scale)))
+    ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    if not ok:
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(buf).decode("ascii")
+
+
+def _score_one_frame(frame):
+    result = upload_detector.analyze_single_frame(frame)
+    result["thumbnail"] = _frame_to_thumbnail_b64(frame)
+    return result
+
+
+@app.route('/analyze-upload', methods=['POST'])
+def analyze_upload():
+    if "media" not in request.files:
+        return jsonify({"error": "no file field 'media' in request"}), 400
+    f = request.files["media"]
+    if f.filename == "":
+        return jsonify({"error": "empty filename"}), 400
+
+    ok, ext = _allowed_file(f.filename)
+    if not ok:
+        return jsonify({"error": "unsupported file type: .{}".format(ext)}), 400
+
+    filename = secure_filename(f.filename)
+    tmp_dir = tempfile.mkdtemp(prefix="dfg_upload_")
+    tmp_path = os.path.join(tmp_dir, filename)
+    f.save(tmp_path)
+
+    is_video = ext in ALLOWED_VIDEO_EXT
+    frame_results = []
+
+    try:
+        if is_video:
+            cap = cv2.VideoCapture(tmp_path)
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+            sample_indices = None
+            if total > 0:
+                step = max(1, total // MAX_UPLOAD_FRAMES)
+                sample_indices = set(range(0, total, step))
+
+            idx, sampled = 0, 0
+            while sampled < MAX_UPLOAD_FRAMES:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if sample_indices is None or idx in sample_indices:
+                    frame_results.append(_score_one_frame(frame))
+                    sampled += 1
+                idx += 1
+            cap.release()
+        else:
+            frame = cv2.imread(tmp_path)
+            if frame is None:
+                return jsonify({"error": "could not decode image"}), 400
+            frame_results.append(_score_one_frame(frame))
+    finally:
+        try:
+            os.remove(tmp_path)
+            os.rmdir(tmp_dir)
+        except OSError:
+            pass
+
+    if not frame_results:
+        return jsonify({"error": "no frames could be read from file"}), 400
+
+    probs = [r["deepfake_probability"] for r in frame_results if r["face_found"]]
+    if not probs:
+        return jsonify({"verdict": "NO_FACE", "frames": frame_results})
+
+    mean_prob = float(np.mean(probs))
+    verdict = "FAKE" if mean_prob > 0.5 else "REAL"
+    confidence_pct = round((mean_prob if verdict == "FAKE" else 1 - mean_prob) * 100, 1)
+
+    return jsonify({
+        "verdict": verdict,
+        "confidence_pct": confidence_pct,
+        "mean_deepfake_probability": round(mean_prob, 4),
+        "frames_analyzed": len(frame_results),
+        "model_backend": upload_detector.backend or "mock",
+        "frames": frame_results,
+    })
 
 # ─────────────────────────────────────────────
 # REST endpoints
@@ -826,7 +931,7 @@ def get_scores():
                    band=band)
     _last_trust_band = band
 
-    if band == "awaiting":
+    if band == "awaiting" or all(v is None for v in latest_scores.values()):
         reason = "Session starting — waiting for verification modules to report."
     else:
         reason = build_reason(

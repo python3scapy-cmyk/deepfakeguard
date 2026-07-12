@@ -33,36 +33,50 @@ REAL_LABEL_INDEX = 1
 
 
 class DeepfakeDetector:
-    def __init__(self, model_path=None, device="cpu", hf_model_name=DEFAULT_MODEL_NAME):
+    def __init__(self, model_path=None, device="cpu",
+                 hf_model_name=DEFAULT_MODEL_NAME):
         self.device = device
         self.frame_counter = 0
         self.subsample = 3
         self.window = deque(maxlen=30)
         self.model = None
         self.processor = None
-        self.backend = None  # "siglip_hf", "efficientnet_local", or None (mock)
-        bundled = os.path.join(getattr(cv2.data, "haarcascades", ""), "haarcascade_frontalface_default.xml")
-        self.cascade_path = bundled if os.path.exists(bundled) else "haarcascade_frontalface_default.xml"
+        # "siglip_hf", "efficientnet_local", or None (mock)
+        self.backend = None
+        bundled = os.path.join(
+    getattr(
+        cv2.data,
+        "haarcascades",
+        ""),
+         "haarcascade_frontalface_default.xml")
+        self.cascade_path = bundled if os.path.exists(
+            bundled) else "haarcascade_frontalface_default.xml"
 
         self.face_cascade = cv2.CascadeClassifier(self.cascade_path)
 
         if self.face_cascade.empty():
-            print(f"[WARNING] Could not load Haar cascade from {self.cascade_path}")
+            print(
+    f"[WARNING] Could not load Haar cascade from {
+        self.cascade_path}")
         # Priority 1: a local custom checkpoint explicitly passed in (e.g. if
         # someone later trains/exports their own EfficientNet weights).
         if model_path and os.path.exists(model_path):
             try:
                 import torch
                 from efficientnet_pytorch import EfficientNet
-                self.model = EfficientNet.from_name("efficientnet-b0", num_classes=1)
-                self.model.load_state_dict(torch.load(model_path, map_location=device))
+                self.model = EfficientNet.from_name(
+                    "efficientnet-b0", num_classes=1)
+                self.model.load_state_dict(
+                    torch.load(model_path, map_location=device))
                 self.model.to(device)
                 self.model.eval()
                 self.backend = "efficientnet_local"
-                print(f"[INFO] Loaded local EfficientNet checkpoint from {model_path}")
+                print(
+    f"[INFO] Loaded local EfficientNet checkpoint from {model_path}")
                 return
             except Exception as e:
-                print(f"[WARNING] Could not load local EfficientNet checkpoint: {e}")
+                print(
+    f"[WARNING] Could not load local EfficientNet checkpoint: {e}")
                 self.model = None
 
         # Priority 2: real pretrained deepfake classifier from Hugging Face
@@ -70,16 +84,21 @@ class DeepfakeDetector:
         try:
             import torch
             from transformers import AutoImageProcessor, SiglipForImageClassification
-            print(f"[INFO] Loading deepfake classifier '{hf_model_name}' (first run downloads ~370MB)...")
+            print(
+    f"[INFO] Loading deepfake classifier '{hf_model_name}' (first run downloads ~370MB)...")
             self.processor = AutoImageProcessor.from_pretrained(hf_model_name)
-            self.model = SiglipForImageClassification.from_pretrained(hf_model_name)
+            self.model = SiglipForImageClassification.from_pretrained(
+                hf_model_name)
             self.model.to(device)
             self.model.eval()
             self.backend = "siglip_hf"
-            print("[INFO] Real deepfake classifier loaded (SigLIP2, prithivMLmods/deepfake-detector-model-v1)")
+            print(
+                "[INFO] Real deepfake classifier loaded (SigLIP2, prithivMLmods/deepfake-detector-model-v1)")
         except Exception as e:
-            print(f"[WARNING] Could not load real deepfake classifier ({e}) -> using mock Stage-2 detector")
-            print("[WARNING] Check: pip install transformers torch, and internet access on first run.")
+            print(
+    f"[WARNING] Could not load real deepfake classifier ({e}) -> using mock Stage-2 detector")
+            print(
+                "[WARNING] Check: pip install transformers torch, and internet access on first run.")
             self.model = None
             self.processor = None
             self.backend = None
@@ -102,7 +121,9 @@ class DeepfakeDetector:
     def _stage2_efficientnet(self, face_crop):
         try:
             import torch
-            tensor = torch.from_numpy(self._preprocess_efficientnet(face_crop)).float().unsqueeze(0).to(self.device)
+            tensor = torch.from_numpy(
+    self._preprocess_efficientnet(face_crop)).float().unsqueeze(0).to(
+        self.device)
             with torch.no_grad():
                 out = self.model(tensor)
                 return float(torch.sigmoid(out).item())
@@ -120,7 +141,8 @@ class DeepfakeDetector:
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                probs = torch.nn.functional.softmax(outputs.logits, dim=1).squeeze()
+                probs = torch.nn.functional.softmax(
+                    outputs.logits, dim=1).squeeze()
                 deepfake_probability = float(probs[FAKE_LABEL_INDEX].item())
             return deepfake_probability
         except Exception as e:
@@ -132,8 +154,23 @@ class DeepfakeDetector:
             return self._stage2_siglip(face_crop)
         if self.backend == "efficientnet_local":
             return self._stage2_efficientnet(face_crop)
-        # No real model loaded -> mock, clearly labeled as such in the output payload.
+        # No real model loaded -> mock, clearly labeled as such in the output
+        # payload.
         return float(np.random.uniform(0.1, 0.4))
+
+
+    def analyze_single_frame(self, frame_bgr):
+        """One-shot scoring for offline (uploaded photo/video) analysis --
+        always runs Stage 2 directly on the detected face, bypassing the
+        live-session cascade's texture-gate/frame-subsampling/rolling-window
+        logic (those exist for real-time streams, not a one-off upload)."""
+        faces = self._detect_face(frame_bgr)
+        if faces is None or len(faces) == 0:
+            return {"face_found": False, "deepfake_probability": None}
+        x, y, w, h = faces[0]
+        face_crop = frame_bgr[y:y + h, x:x + w]
+        prob = self._stage2_infer(face_crop)
+        return {"face_found": True, "deepfake_probability": float(prob)}
 
     def _detect_face(self, frame):
         if self.face_cascade.empty():
