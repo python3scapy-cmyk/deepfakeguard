@@ -24,6 +24,19 @@ def normalize_anomaly_score(
     return round(score, 2)
 
 
+def compute_variance_score(deltas, window_size=50):
+    """Same math as get_timing_anomaly_score's inner loop, but operating on
+    inter-frame deltas the caller already collected (e.g. from the main
+    camera loop's own cap.read() timestamps) instead of opening a second
+    competing VideoCapture on the same device. Returns None if there isn't
+    enough data yet (same 'insufficient data' contract as the original)."""
+    recent = list(deltas)[-window_size:]
+    if len(recent) < 10:
+        return None
+    variance = float(np.var(recent))
+    return normalize_anomaly_score(variance)
+
+
 def get_timing_anomaly_score(
     camera_index=0,
     duration_sec=3,
