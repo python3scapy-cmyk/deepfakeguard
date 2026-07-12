@@ -173,7 +173,10 @@
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <script>
-(function(){
+// This block sits above <body>, so it MUST wait for DOMContentLoaded -
+// running immediately made every getElementById return null, the first
+// addEventListener threw, and the whole upload UI silently died.
+document.addEventListener('DOMContentLoaded', function(){
     const dropZone = document.getElementById('uploadDropZone');
     const fileInput = document.getElementById('uploadFileInput');
     const fileNameEl = document.getElementById('uploadFileName');
@@ -247,9 +250,42 @@
             bannerEl.style.color = isFake ? 'var(--danger)' : 'var(--success)';
             verdictIconEl.textContent = isFake ? '👎' : '👍';
         }
+
+        // ── Faza 3: full-pipeline detail line (trust, audio, continuity) ──
+        let detailEl = document.getElementById('uploadPipelineDetail');
+        if (!detailEl) {
+            detailEl = document.createElement('div');
+            detailEl.id = 'uploadPipelineDetail';
+            detailEl.style.cssText =
+                'margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.7;';
+            bannerEl.parentNode.insertBefore(detailEl, bannerEl.nextSibling);
+        }
+        const p = data.full_pipeline;
+        if (p && p.trust_score !== undefined) {
+            const s = p.signals || {};
+            const parts = ['Trust: ' + p.trust_score + ' (' + p.trust_band + ')'];
+            if (s.audio_spoof_probability !== null && s.audio_spoof_probability !== undefined) {
+                parts.push('Audio spoof: ' + Math.round(s.audio_spoof_probability * 100) + '%');
+            } else {
+                parts.push('Audio: ' + (p.audio_note || 'n/a'));
+            }
+            if (s.identity_continuity_min !== null && s.identity_continuity_min !== undefined) {
+                parts.push('Identity continuity: ' + Math.round(s.identity_continuity_min * 100) + '% min');
+            }
+            if (s.spoof_frame_ratio !== undefined && s.spoof_frame_ratio !== null) {
+                parts.push('Spoof frames: ' + Math.round(s.spoof_frame_ratio * 100) + '%');
+            }
+            if (p.hard_deny_reasons && p.hard_deny_reasons.length) {
+                parts.push('DENY: ' + p.hard_deny_reasons.join(', ').replace(/_/g, ' '));
+            }
+            detailEl.textContent = parts.join('  ·  ');
+            detailEl.style.display = 'block';
+        } else if (detailEl) {
+            detailEl.style.display = 'none';
+        }
         resultsEl.style.display = 'block';
     }
-})();
+});
 </script>
 <body>
 <!-- ===== Consent Acknowledgment Modal (Day 2) ===== -->
@@ -1556,6 +1592,26 @@ async function simulateLegit() {
 
 document.getElementById('attackBtn').addEventListener('click', simulateAttack);
 document.getElementById('legitBtn').addEventListener('click', simulateLegit);
+
+// ── Faza 2: demo-mode gate ─────────────────────────────────────
+// The three simulator buttons POST fake payloads into the SAME
+// latest_scores store the live engine feeds. During a real public
+// session one accidental click would corrupt the live verdict, so
+// they are hidden unless the dashboard is opened with ?demo=1.
+(function () {
+    const demoMode = new URLSearchParams(window.location.search).get('demo') === '1';
+    if (!demoMode) {
+        ['cycleBtn', 'attackBtn', 'legitBtn'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+    } else {
+        ['attackBtn', 'legitBtn'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent += ' (SIMULATED)';
+        });
+    }
+})();
 
 setInterval(fetchLiveScores, 1500);  // poll every 1.5 seconds
 fetchLiveScores();                   // also fire immediately on load
