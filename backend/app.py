@@ -11,7 +11,9 @@ import tempfile
 import cv2
 import numpy as np
 from werkzeug.utils import secure_filename
+from flask import send_from_directory
 from vision.deepfake_detector import DeepfakeDetector
+from engine import get_engine, drop_session
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 CORS(app)  # allows cross-origin HTTP requests from the dashboard
@@ -68,8 +70,9 @@ _ema_trust_score = None
 EMA_ALPHA = 0.3
 
 app.config['MAX_CONTENT_LENGTH'] = 150 * 1024 * 1024  # 150MB cap on uploads
-upload_detector = DeepfakeDetector()
-
+# Faza 3: the standalone upload detector is gone - /analyze-upload now
+# runs the FULL pipeline via engine.analyze_file(), which reuses the
+# engine's shared SigLIP instance instead of loading a second ~370MB copy.
 ALLOWED_VIDEO_EXT = {"mp4", "mov", "avi", "webm", "mkv"}
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "bmp"}
 MAX_UPLOAD_FRAMES = 20  # mirrors the "Sequence Length" slider in your reference demo
@@ -483,24 +486,12 @@ def _allowed_file(filename):
     return (ext in ALLOWED_VIDEO_EXT or ext in ALLOWED_IMAGE_EXT), ext
 
 
-def _frame_to_thumbnail_b64(frame, max_dim=160):
-    h, w = frame.shape[:2]
-    scale = max_dim / max(h, w)
-    small = cv2.resize(frame, (int(w * scale), int(h * scale)))
-    ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
-    if not ok:
-        return None
-    return "data:image/jpeg;base64," + base64.b64encode(buf).decode("ascii")
-
-
-def _score_one_frame(frame):
-    result = upload_detector.analyze_single_frame(frame)
-    result["thumbnail"] = _frame_to_thumbnail_b64(frame)
-    return result
-
-
 @app.route('/analyze-upload', methods=['POST'])
 def analyze_upload():
+    """Faza 3: uploads now run the FULL pipeline (visual deepfake + 2D
+    spoof heuristics + identity continuity + audio spoof via ffmpeg),
+    fused with the same weights/bands as the live path. Legacy response
+    fields are preserved; a 'full_pipeline' block is added on top."""
     if "media" not in request.files:
         return jsonify({"error": "no file field 'media' in request"}), 400
     f = request.files["media"]
@@ -517,32 +508,10 @@ def analyze_upload():
     f.save(tmp_path)
 
     is_video = ext in ALLOWED_VIDEO_EXT
-    frame_results = []
-
     try:
-        if is_video:
-            cap = cv2.VideoCapture(tmp_path)
-            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-            sample_indices = None
-            if total > 0:
-                step = max(1, total // MAX_UPLOAD_FRAMES)
-                sample_indices = set(range(0, total, step))
-
-            idx, sampled = 0, 0
-            while sampled < MAX_UPLOAD_FRAMES:
-                ok, frame = cap.read()
-                if not ok:
-                    break
-                if sample_indices is None or idx in sample_indices:
-                    frame_results.append(_score_one_frame(frame))
-                    sampled += 1
-                idx += 1
-            cap.release()
-        else:
-            frame = cv2.imread(tmp_path)
-            if frame is None:
-                return jsonify({"error": "could not decode image"}), 400
-            frame_results.append(_score_one_frame(frame))
+        from engine import analyze_file
+        result = analyze_file(tmp_path, is_video=is_video,
+                              max_frames=MAX_UPLOAD_FRAMES)
     finally:
         try:
             os.remove(tmp_path)
@@ -550,25 +519,15 @@ def analyze_upload():
         except OSError:
             pass
 
-    if not frame_results:
-        return jsonify({"error": "no frames could be read from file"}), 400
+    if "error" in result:
+        return jsonify(result), 400
 
-    probs = [r["deepfake_probability"] for r in frame_results if r["face_found"]]
-    if not probs:
-        return jsonify({"verdict": "NO_FACE", "frames": frame_results})
-
-    mean_prob = float(np.mean(probs))
-    verdict = "FAKE" if mean_prob > 0.5 else "REAL"
-    confidence_pct = round((mean_prob if verdict == "FAKE" else 1 - mean_prob) * 100, 1)
-
-    return jsonify({
-        "verdict": verdict,
-        "confidence_pct": confidence_pct,
-        "mean_deepfake_probability": round(mean_prob, 4),
-        "frames_analyzed": len(frame_results),
-        "model_backend": upload_detector.backend or "mock",
-        "frames": frame_results,
-    })
+    fp = result.get("full_pipeline") or {}
+    if fp.get("hard_deny_reasons"):
+        log_event("upload_analysis",
+                   "Upload flagged - {}".format(
+                       ", ".join(fp["hard_deny_reasons"]).replace("_", " ")))
+    return jsonify(result)
 
 # ─────────────────────────────────────────────
 # REST endpoints
@@ -662,16 +621,14 @@ def receive_score():
     return jsonify({"received": True, "module": module})
 
 
-@app.route('/fusion', methods=['POST'])
-def receive_fusion():
-    """Receives the complete fusion JSON blob from main.py and maps it
-    into the existing latest_scores store. This is simpler than making
-    main.py craft four separate /score payloads that each pass the
-    individual module validators."""
-    payload = request.get_json(silent=True)
-    if not payload:
-        return jsonify({"error": "empty or invalid JSON body"}), 400
+def ingest_fusion(payload):
+    """Maps a complete fusion payload dict into the latest_scores store.
 
+    Called from TWO places (Faza 1):
+      - the /fusion HTTP route below (main.py's local-camera POST)
+      - the 'analysis_frame' Socket.IO handler (in-process AnalysisEngine
+        results for browser participants)
+    so the dashboard sees identical data regardless of the source."""
     now_ts = datetime.now(timezone.utc).isoformat()
     session_id = payload.get("session_id", "unknown")
     signals = payload.get("signals", {})
@@ -826,6 +783,14 @@ def receive_fusion():
         log_event("fusion_verdict",
                    "Access denied - {}".format(", ".join(hard_deny).replace("_", " ")))
 
+
+@app.route('/fusion', methods=['POST'])
+def receive_fusion():
+    """Thin HTTP wrapper around ingest_fusion() for main.py's local mode."""
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "empty or invalid JSON body"}), 400
+    ingest_fusion(payload)
     return jsonify({"received": True, "source": "fusion", "signals_mapped": True})
 
 
@@ -1095,6 +1060,78 @@ def on_answer(data):
 @socketio.on('ice-candidate')
 def on_ice_candidate(data):
     emit('ice-candidate', data, room=data['room'], include_self=False)
+
+
+# ─────────────────────────────────────────────
+# Faza 1: browser frame ingestion → AnalysisEngine
+# participant.html emits 'analysis_frame' at ~5fps with a base64 JPEG.
+# The engine drops frames if it's still busy, so a slow inference step
+# can never queue up and snowball latency.
+# ─────────────────────────────────────────────
+@socketio.on('analysis_frame')
+def on_analysis_frame(data):
+    sid = data.get('session_id')
+    b64 = data.get('jpg', '')
+    if not sid or ',' not in b64:
+        return
+    try:
+        raw = base64.b64decode(b64.split(',', 1)[1])
+        frame = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return
+    if frame is None:
+        return
+
+    eng = get_engine(sid, remote=True)
+    if eng is None:
+        emit('analysis_busy',
+             {'message': 'Server at capacity - please wait a moment and retry'})
+        return
+
+    fusion = eng.process_frame(frame)
+    if fusion:
+        ingest_fusion(fusion)  # dashboard sees it via the same /scores path
+        emit('verdict_update', {
+            'session_id': sid,
+            'trust_score': fusion['trust_score'],
+            'trust_band': fusion['trust_band'],
+            'verdict': fusion['verdict'],
+            'hard_deny_reasons': fusion['hard_deny_reasons'],
+            'active_challenge': fusion.get('active_challenge'),
+            'challenge_result': fusion.get('challenge_result'),
+        })
+
+
+@socketio.on('analysis_end')
+def on_analysis_end(data):
+    sid = (data or {}).get('session_id')
+    if sid:
+        drop_session(sid)
+
+
+# ─────────────────────────────────────────────
+# Faza 1: serve the frontend from Flask so participant/dashboard run on
+# the same origin as the API (no file://, no CORS surprises, and
+# localhost counts as a secure context for getUserMedia).
+#   http://localhost:5000/participant  → participant.html
+#   http://localhost:5000/dashboard    → index.html
+# ─────────────────────────────────────────────
+FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+
+
+@app.route('/participant')
+def participant_page():
+    return send_from_directory(FRONTEND_DIR, 'participant.html')
+
+
+@app.route('/dashboard')
+def dashboard_page():
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+
+@app.route('/frontend/<path:fname>')
+def frontend_static(fname):
+    return send_from_directory(FRONTEND_DIR, fname)
 
 
 if __name__ == '__main__':
