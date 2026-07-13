@@ -133,6 +133,46 @@ class AASISTDetector:
             "timestamp": time.time(),
         }
 
+    def score_pcm_no_state(self, pcm, chunk_seconds=1.0):
+        """
+        Tam uzunluqlu PCM klipini (istənilən uzunluqda) 1 saniyəlik
+        parçalara bölüb hər birini kalibrlənmiş modellə skorlayır və
+        ortalamasını qaytarır. self.window-a TOXUNMUR -- yəni bu fayl
+        üçün nəticə heç bir başqa upload və ya canlı sessiya ilə
+        QARIŞMIR. Fayl analizi (analyze_file) və hər sessiya üçün ayrı
+        smoothing lazım olan yerlərdə bunu istifadə edin, ensemble_score()
+        deyil.
+        """
+        chunk_len = int(self.sample_rate * chunk_seconds)
+        if chunk_len <= 0:
+            chunk_len = self.sample_rate
+
+        pcm = np.asarray(pcm, dtype=np.float32)
+        if len(pcm) == 0:
+            pcm = np.zeros(chunk_len, dtype=np.float32)
+
+        n_chunks = max(1, len(pcm) // chunk_len)
+        scores = []
+        for i in range(n_chunks):
+            start = i * chunk_len
+            chunk = pcm[start:start + chunk_len]
+            if len(chunk) < chunk_len:
+                chunk = np.pad(chunk, (0, chunk_len - len(chunk)))
+            if self.model is not None:
+                scores.append(self._real_xgb_score(chunk))
+            else:
+                scores.append(self._mock_heuristic_score(chunk))
+
+        mean_score = float(np.mean(scores))
+        return {
+            "spoof_probability": mean_score,
+            "model": self.model_name,
+            "chunks_scored": n_chunks,
+            "per_chunk_scores": [round(s, 4) for s in scores],
+            "audio_quality": "clean" if np.std(pcm) > 0.01 else "noisy",
+            "timestamp": time.time(),
+        }
+
     def get_audio_spoof_score(self):
         """0-100 scale for the fusion engine (higher = more likely spoofed)."""
         if not self.window:
