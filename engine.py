@@ -72,7 +72,7 @@ DF_INTERVAL_SEC = 3.0    # remote: SigLIP at most once per 3s
 ID_INTERVAL_SEC = 6.0    # remote: ArcFace at most once per 6s
 NO_FACE_STREAK_DENY = 5  # consecutive face-less processed frames before hard deny
 CHALLENGE_COOLDOWN_FRAMES = 15   # ~1.5s at 10fps (was 6s of dead air)
-CHALLENGE_TIMEOUT_SEC = 6.0      # keep in sync with LivenessChallengeEngine
+CHALLENGE_TIMEOUT_SEC = 8.0      # keep in sync with LivenessChallengeEngine
 SPOOF_WINDOW = 15        # same smoothing window as main.py
 SPOOF_MAJORITY = 0.6     # same majority threshold as main.py
 
@@ -351,6 +351,7 @@ class AnalysisEngine:
         # security theatre - a verification either concluded or it didn't.
         self.session_final = False
         self.final_verdict = None
+        self._voice_pending_clip = False   # prompt shown, clip not yet verified
         self._audio_challenge_result = None    # last verify() dict (buffered for emission)
         self._audio_challenge_done = False     # one voice factor per session (demo scope)
         self._audio_force_emit = False
@@ -380,6 +381,7 @@ class AnalysisEngine:
             result["phrase"] = phrase
             result["reason"] = (result.get("reason") or "") + " (late clip - grace window)"
             self._audio_challenge_result = result
+            self._voice_pending_clip = False
             self._audio_force_emit = True
             print(f"[ENGINE][{self.session_id}] VOICE CHALLENGE (grace) "
                   f"{'PASSED' if result['passed'] else 'FAILED'}: {result.get('reason')}")
@@ -389,6 +391,7 @@ class AnalysisEngine:
             result["phrase"] = self.audio_challenge["phrase"]
             self._audio_challenge_result = result
             self._audio_challenge_done = True
+            self._voice_pending_clip = False
             self.audio_challenge = None
             self._audio_force_emit = True
             print(f"[ENGINE][{self.session_id}] VOICE CHALLENGE "
@@ -415,7 +418,7 @@ class AnalysisEngine:
         return fuse_scores(scores)
 
     # ---------------- main entry point ----------------
-    def process_frame(self, frame_bgr, ear=None):
+    def process_frame(self, frame_bgr, ear=None, yaw_ratio=None):
         """Analyze one frame. Returns a fusion payload dict every
         EMIT_EVERY frames, otherwise None.
 
@@ -428,12 +431,12 @@ class AnalysisEngine:
                 return None
             self._busy = True
         try:
-            return self._process_frame_inner(frame_bgr, ear=ear)
+            return self._process_frame_inner(frame_bgr, ear=ear, yaw_ratio=yaw_ratio)
         finally:
             with self._busy_lock:
                 self._busy = False
 
-    def _process_frame_inner(self, frame, ear=None):
+    def _process_frame_inner(self, frame, ear=None, yaw_ratio=None):
         self.frame_count += 1
         now = time.time()
         self.last_seen = now
@@ -472,7 +475,7 @@ class AnalysisEngine:
                     insight_yaw = float(pose[1])
 
         _, liveness_payload = self.liveness_engine.process_frame(
-            frame, faces, true_yaw=insight_yaw, ear=ear)
+            frame, faces, true_yaw=insight_yaw, ear=ear, mesh_yaw=yaw_ratio)
 
         if liveness_payload.get("face_detected"):
             self._no_face_streak = 0
@@ -535,6 +538,8 @@ class AnalysisEngine:
             force_emit = True   # participant HUD should see PASS/FAIL immediately
         elif (not self.session_final
                 and not self.challenge_active
+                and self.audio_challenge is None          # voice factor has the floor
+                and not self._voice_pending_clip
                 and self.frame_count > self.challenge_cooldown
                 and liveness_payload.get("face_detected")
                 and liveness_payload.get("state") == "IDLE"):
@@ -559,6 +564,7 @@ class AnalysisEngine:
                 "issued_at": now,
                 "timeout_sec": 16.0,
             }
+            self._voice_pending_clip = True
             force_emit = True
             print(f"[ENGINE][{self.session_id}] NEW VOICE CHALLENGE: "
                   f"say '{self.audio_challenge['phrase']}'")
@@ -572,6 +578,7 @@ class AnalysisEngine:
                 "reason": "no voice response within the time limit",
             }
             self._audio_challenge_done = True
+            self._voice_pending_clip = False
             self._voice_grace_phrase = self.audio_challenge["phrase"]
             self._voice_grace_until = now + 20.0   # late-clip grace window
             self.audio_challenge = None
@@ -604,7 +611,7 @@ class AnalysisEngine:
         self.spoof_history.append(raw_spoof_flag)
         spoof_ratio = sum(self.spoof_history) / len(self.spoof_history)
         anti_spoof_2d_flag = (spoof_ratio >= SPOOF_MAJORITY
-                              and len(self.spoof_history) >= 5)
+                              and len(self.spoof_history) >= 12)
 
         # ---- signal scores (same semantics as main.py) ----
         identity_trust = (identity_result["identity_score"]
@@ -628,8 +635,12 @@ class AnalysisEngine:
                 and self._audio_challenge_result.get("passed") is False):
             audio_trust = min(audio_trust, 25) if audio_trust is not None else 25
 
-        if anti_spoof_2d_flag:
-            liveness_trust = 20
+        _df_now = float(np.mean(self.df_window)) if self.df_window else None
+        _corroborated = (anti_spoof_2d_flag and _df_now is not None and _df_now >= 0.55)
+        if _corroborated:
+            liveness_trust = 20          # heuristic AND model agree -> spoof
+        elif anti_spoof_2d_flag:
+            liveness_trust = 45          # heuristic alone -> suspicion, not a verdict
         elif self._last_challenge_passed is True:
             liveness_trust = 100
         elif self._last_challenge_passed is False:
@@ -665,6 +676,11 @@ class AnalysisEngine:
         if not force_emit and self.frame_count % EMIT_EVERY != 0:
             return None
 
+        if active_audio_challenge is not None:
+            print(f"[ENGINE][{self.session_id}] emit carries voice prompt "
+                  f"'{active_audio_challenge['phrase']}' "
+                  f"({active_audio_challenge['remaining_sec']}s left)")
+
         fusion = self._generate_fusion(
             liveness_payload, spoof_analysis, anti_spoof_2d_flag,
             trust_data, sync_result, identity_result, active_challenge,
@@ -691,7 +707,9 @@ class AnalysisEngine:
             hard_deny_reasons.append("no_face_detected")
         if multi_face:
             hard_deny_reasons.append("multiple_faces")
-        if anti_spoof_2d_flag:
+        df_mean_now = float(np.mean(self.df_window)) if self.df_window else None
+        model_agrees_fake = (df_mean_now is not None and df_mean_now >= 0.55)
+        if anti_spoof_2d_flag and model_agrees_fake:
             hard_deny_reasons.append("2d_spoof_detected_sustained")
         # Session-continuity break = the face changed mid-scan. Treated as
         # a hard deny only on a confident mismatch (score computed AND low).

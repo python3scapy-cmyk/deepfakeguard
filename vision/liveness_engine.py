@@ -42,7 +42,7 @@ class LivenessChallengeEngine:
         # 6s: long enough to read the prompt and act, short enough that a
         # failed attempt doesn't stall the whole verification. Users
         # consistently respond within ~2-3s once they see the prompt.
-        self.CHALLENGE_TIMEOUT = 6.0
+        self.CHALLENGE_TIMEOUT = 8.0
         self.YAW_THRESHOLD = 15.0        # legacy absolute threshold (kept for payload compat)
         # Turn detection is now BASELINE-RELATIVE with PEAK tracking:
         #  - baseline = face position when the challenge was issued, so a
@@ -79,9 +79,18 @@ class LivenessChallengeEngine:
         # turn evidence comes straight from it - no proxies. Flip the sign
         # constant if left/right verify swapped on your capture setup
         # (watch the [LIVENESS] true_yaw log line to confirm).
-        self.TRUE_YAW_THRESHOLD = 16.0   # degrees
-        self.TRUE_YAW_FLIPPED = False
+        self.TRUE_YAW_THRESHOLD = 11.0   # degrees (InsightFace fallback)
+        # PRIMARY turn signal: nose offset from the eye midpoint, normalised
+        # by eye span, measured on the browser's un-mirrored mesh. Sign is
+        # fixed by geometry (see participant.html), so no convention guessing.
+        # A relaxed, natural turn lands around 0.20-0.35; sitting still stays
+        # under ~0.05.
+        self.MESH_YAW_THRESHOLD = 0.14
+        self._peak_mesh_yaw = 0.0
+        self._last_mesh_log = 0.0
+        self.TRUE_YAW_FLIPPED = True
         self._last_true_yaw_log = 0.0
+        self._peak_true_yaw = 0.0
         prof_path = os.path.join(getattr(cv2.data, "haarcascades", ""),
                                  "haarcascade_profileface.xml")
         self._profile_cascade = cv2.CascadeClassifier(prof_path)
@@ -217,13 +226,15 @@ class LivenessChallengeEngine:
         self.blink_counter = 0
         self.eye_dark_frames = 0
         self._ear_closed = False
+        self._peak_true_yaw = 0.0
+        self._peak_mesh_yaw = 0.0
         self._yaw_baseline = None
         self._width_baseline = None
         self._peak_rel_yaw = 0.0
         self._turn_evidence = {"turn_left": False, "turn_right": False}
         return self.current_challenge
 
-    def process_frame(self, frame, faces=None, true_yaw=None, ear=None):
+    def process_frame(self, frame, faces=None, true_yaw=None, ear=None, mesh_yaw=None):
         payload = {
             "state": self.state.value,
             "challenge_type": self.current_challenge,
@@ -276,13 +287,38 @@ class LivenessChallengeEngine:
                 self._turn_evidence["turn_left"] = True
             if self._peak_rel_yaw > self.REL_YAW_THRESHOLD:
                 self._turn_evidence["turn_right"] = True
-            # REAL 3D yaw (definitive when provided)
+            # PRIMARY: geometric mesh yaw (sign is unambiguous)
+            if mesh_yaw is not None:
+                if abs(mesh_yaw) > abs(self._peak_mesh_yaw):
+                    self._peak_mesh_yaw = mesh_yaw
+                if mesh_yaw >= self.MESH_YAW_THRESHOLD:
+                    self._turn_evidence["turn_left"] = True
+                if mesh_yaw <= -self.MESH_YAW_THRESHOLD:
+                    self._turn_evidence["turn_right"] = True
+                now_m = time.time()
+                if now_m - self._last_mesh_log > 0.7:
+                    side = ("LEFT" if mesh_yaw >= self.MESH_YAW_THRESHOLD
+                            else "RIGHT" if mesh_yaw <= -self.MESH_YAW_THRESHOLD
+                            else "centre")
+                    print(f"[LIVENESS] mesh_yaw={mesh_yaw:+.3f} -> {side} "
+                          f"(need |{self.MESH_YAW_THRESHOLD}|, "
+                          f"challenge={self.current_challenge})")
+                    self._last_mesh_log = now_m
+
+            # FALLBACK: InsightFace 3D yaw (used when no mesh value arrives,
+            # e.g. main.py's local camera loop)
             if true_yaw is not None:
                 ty = -true_yaw if self.TRUE_YAW_FLIPPED else true_yaw
+                if abs(ty) > abs(self._peak_true_yaw):
+                    self._peak_true_yaw = ty
                 now_ = time.time()
                 if now_ - self._last_true_yaw_log > 0.7:
-                    print(f"[LIVENESS] true_yaw={ty:+.1f} deg "
-                          f"(challenge={self.current_challenge})")
+                    side = ("RIGHT" if ty >= self.TRUE_YAW_THRESHOLD
+                            else "LEFT" if ty <= -self.TRUE_YAW_THRESHOLD
+                            else "centre")
+                    print(f"[LIVENESS] true_yaw={ty:+.1f} deg -> reads as {side} "
+                          f"(challenge={self.current_challenge}; if this is "
+                          f"backwards, set TRUE_YAW_FLIPPED={not self.TRUE_YAW_FLIPPED})")
                     self._last_true_yaw_log = now_
                 if ty >= self.TRUE_YAW_THRESHOLD:
                     self._turn_evidence["turn_right"] = True
@@ -304,7 +340,18 @@ class LivenessChallengeEngine:
 
         if self.state == ChallengeState.AWAITING_RESPONSE:
             elapsed = time.time() - self.challenge_start_time
-            if elapsed > self.CHALLENGE_TIMEOUT:
+            earned = (
+                (self.current_challenge == "blink_twice" and self.blink_counter >= 2)
+                or (self.current_challenge in ("turn_left", "turn_right")
+                    and self._turn_evidence.get(self.current_challenge))
+            )
+            if elapsed > self.CHALLENGE_TIMEOUT and not earned:
+                if self.current_challenge in ("turn_left", "turn_right"):
+                    print(f"[LIVENESS] turn TIMEOUT: challenge={self.current_challenge} "
+                          f"peak_mesh_yaw={self._peak_mesh_yaw:+.3f} "
+                          f"(need |{self.MESH_YAW_THRESHOLD}|) "
+                          f"peak_true_yaw={self._peak_true_yaw:+.1f} "
+                          f"evidence={self._turn_evidence}")
                 self.state = ChallengeState.FAILED
                 payload["challenge_result"] = {
                     "challenge_type": self.current_challenge,

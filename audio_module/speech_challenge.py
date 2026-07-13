@@ -29,18 +29,18 @@ import numpy as np
 
 # Short, phonetically distinct, easy for non-native speakers.
 PHRASE_POOL = [
-    "magic apples",
     "hello world",
-    "open sesame",
-    "blue horizon",
-    "silver mountain",
-    "seven green stars",
-    "golden river",
-    "quiet thunder",
+    "open the door",
+    "blue sky",
+    "green apple",
+    "good morning",
+    "red car",
+    "big city",
+    "cold water",
 ]
 
-WORD_MATCH_RATIO = 0.72   # difflib ratio for a single word to count as matched
-PHRASE_PASS_RATIO = 0.6   # fraction of phrase words that must be matched
+WORD_MATCH_RATIO = 0.65   # difflib ratio for a single word to count as matched
+PHRASE_PASS_RATIO = 0.5   # fraction of phrase words that must be matched
 
 
 def _normalize(text):
@@ -52,7 +52,7 @@ class SpeechChallengeVerifier:
     """Lazy-loads an ASR backend on first verify() call (not at import or
     construction) so backend startup stays fast."""
 
-    def __init__(self, model_size="tiny"):
+    def __init__(self, model_size="base.en"):
         self.model_size = model_size
         self._backend = None          # "faster_whisper" | "whisper" | "energy_only"
         self._model = None
@@ -96,9 +96,14 @@ class SpeechChallengeVerifier:
     # ---------------- transcription ----------------
     def _transcribe(self, pcm_16k_f32):
         if self._backend == "faster_whisper":
-            segments, _info = self._model.transcribe(
-                pcm_16k_f32, language="en", beam_size=1,
-                vad_filter=True, condition_on_previous_text=False)
+            kwargs = dict(language="en", beam_size=5, vad_filter=True,
+                          condition_on_previous_text=False)
+            try:
+                segments, _info = self._model.transcribe(
+                    pcm_16k_f32, hotwords=", ".join(PHRASE_POOL), **kwargs)
+            except TypeError:
+                # older faster-whisper without hotwords support
+                segments, _info = self._model.transcribe(pcm_16k_f32, **kwargs)
             return " ".join(seg.text for seg in segments).strip()
         if self._backend == "whisper":
             result = self._model.transcribe(

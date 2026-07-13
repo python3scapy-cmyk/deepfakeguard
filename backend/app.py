@@ -15,7 +15,13 @@ from flask import send_from_directory
 from vision.deepfake_detector import DeepfakeDetector
 from engine import get_engine, drop_session
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
+# max_http_buffer_size: engine.io defaults to 1 MB. A 6s voice clip sent as
+# 48kHz float32 base64 was ~1.5 MB, so the websocket was closed with
+# "Invalid frame header" and the clip never arrived - the voice challenge
+# then timed out even though the browser had recorded perfectly good audio.
+# The client now downsamples to 16kHz int16 (~256 KB), and this ceiling
+# keeps a margin.
+socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=10_000_000)
 CORS(app)  # allows cross-origin HTTP requests from the dashboard
 
 # ─────────────────────────────────────────────
@@ -1089,7 +1095,11 @@ def on_analysis_frame(data):
         return
 
     ear = data.get('ear')
-    fusion = eng.process_frame(frame, ear=ear if isinstance(ear, (int, float)) else None)
+    yaw_ratio = data.get('yaw_ratio')
+    fusion = eng.process_frame(
+        frame,
+        ear=ear if isinstance(ear, (int, float)) else None,
+        yaw_ratio=yaw_ratio if isinstance(yaw_ratio, (int, float)) else None)
     if fusion:
         ingest_fusion(fusion)  # dashboard sees it via the same /scores path
         emit('verdict_update', {
@@ -1130,9 +1140,15 @@ def on_audio_clip(data):
     sr = int((data or {}).get('sample_rate', 48000))
     if not sid or not b64:
         return
+    fmt = (data or {}).get('format', 'float32')
     try:
-        pcm = np.frombuffer(base64.b64decode(b64), dtype=np.float32)
-    except Exception:
+        raw = base64.b64decode(b64)
+        if fmt == 'int16':
+            pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        else:
+            pcm = np.frombuffer(raw, dtype=np.float32)
+    except Exception as e:
+        print(f"[AUDIO] could not decode clip: {e}")
         return
     print(f"[AUDIO] clip received: session={sid} {pcm.size/sr:.1f}s @ {sr}Hz "
           f"peak={float(np.abs(pcm).max()):.3f}")

@@ -911,7 +911,11 @@
           // heuristic that never fires in normal lighting. Sending a real
           // EAR up with each analysis frame fixes blink_twice properly.
           window.__DFG_EAR = earFromMesh(landmarks);
-        } else { box = null; landmarks = null; window.__DFG_EAR = null; }
+          window.__DFG_YAW = yawFromMesh(landmarks);
+        } else {
+          box = null; landmarks = null;
+          window.__DFG_EAR = null; window.__DFG_YAW = null;
+        }
       } catch(e){ box = detectHeuristic(data); landmarks = null; }
     } else {
       box = detectHeuristic(data);
@@ -1031,6 +1035,26 @@
     const dx = Math.hypot(lm[e.left].x - lm[e.right].x, lm[e.left].y - lm[e.right].y);
     return dx > 0 ? dy / dx : null;
   }
+  /* Head-turn direction from the SAME mesh, in RAW camera coordinates.
+     MediaPipe runs on the un-mirrored <video>, where x grows to the image
+     right. Turning your head to YOUR right swings the nose toward the
+     image's LEFT, so the sign is fixed by geometry - no dependence on any
+     model's yaw convention (guessing that convention is what kept the turn
+     challenge failing).
+       ratio > 0  ->  user turned LEFT
+       ratio < 0  ->  user turned RIGHT   */
+  const NOSE_TIP = 1, EYE_OUT_L = 33, EYE_OUT_R = 263;
+  function yawFromMesh(lm) {
+    if (!lm || lm.length < 468) return null;
+    try {
+      const nose = lm[NOSE_TIP], eL = lm[EYE_OUT_L], eR = lm[EYE_OUT_R];
+      const eyeMidX = (eL.x + eR.x) / 2;
+      const eyeSpan = Math.abs(eR.x - eL.x);
+      if (!eyeSpan) return null;
+      return (nose.x - eyeMidX) / eyeSpan;   // normalised, scale-free
+    } catch (_) { return null; }
+  }
+
   function earFromMesh(lm) {
     if (!lm || lm.length < 468) return null;
     try {
@@ -1072,6 +1096,7 @@
       socket.emit('analysis_frame', {
         session_id: SESSION_ID,
         ear: (typeof window.__DFG_EAR === 'number') ? window.__DFG_EAR : null,
+        yaw_ratio: (typeof window.__DFG_YAW === 'number') ? window.__DFG_YAW : null,
         jpg: analysisCanvas.toDataURL('image/jpeg', 0.7)
       });
     }, 1000 / ANALYSIS_FPS);
@@ -1159,7 +1184,9 @@
       challengeFlashUntil = Date.now() + 3000;
       challengeDeadline = null;
       setTimeout(() => { if (Date.now() >= challengeFlashUntil) vfCh.hidden = true; }, 3200);
-      return;
+      // NO early return here: the voice row below must be evaluated on the
+      // very same emission that carries the vision result, because the
+      // backend issues the voice challenge on exactly that frame.
     }
 
     // ── VOICE row (its own element, so the vision flash can never
@@ -1180,6 +1207,7 @@
       }
     } else if (d.active_audio_challenge && d.active_audio_challenge.phrase) {
       const ph = d.active_audio_challenge.phrase;
+      if (voiceRecordedPhrase !== ph) console.log('[voice] PROMPT RECEIVED:', ph);
       vfVoice.hidden = false;
       vfVoiceText.className = 'vf-voice-text';
       vfVoiceText.textContent = 'SAY: "' + ph.toUpperCase() + '"';
@@ -1312,8 +1340,27 @@
       const pcm = new Float32Array(total);
       let off = 0;
       for (const c of chunks) { pcm.set(c, off); off += c.length; }
-      // base64-encode the raw float32 bytes
-      const bytes = new Uint8Array(pcm.buffer);
+
+      // Downsample 48kHz -> 16kHz and pack as int16 BEFORE sending.
+      // Raw 48k float32 base64 was ~1.5 MB for a 6s clip, above engine.io's
+      // 1 MB frame limit: the websocket died with "Invalid frame header"
+      // and the clip never reached the server (that's why the voice
+      // challenge always timed out despite a healthy recording). 16k int16
+      // is ~6x smaller and is exactly what Whisper/AASIST want anyway.
+      const srcRate = ctx.sampleRate;
+      const ratio = srcRate / 16000;
+      const outLen = Math.floor(pcm.length / ratio);
+      const i16 = new Int16Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const start = Math.floor(i * ratio);
+        const end = Math.min(pcm.length, Math.floor((i + 1) * ratio));
+        let sum = 0, n = 0;
+        for (let j = start; j < end; j++) { sum += pcm[j]; n++; }   // box filter
+        const v = n ? sum / n : 0;
+        i16[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+      }
+
+      const bytes = new Uint8Array(i16.buffer);
       let bin = '';
       const CHUNK = 0x8000;
       for (let i = 0; i < bytes.length; i += CHUNK) {
@@ -1323,10 +1370,13 @@
       for (let i = 0; i < pcm.length; i += 50) peak = Math.max(peak, Math.abs(pcm[i]));
       console.log('[voice] clip peak level:', peak.toFixed(3),
                   peak < 0.01 ? '(SILENT?! check mic/permissions)' : '(ok)');
+      const b64 = btoa(bin);
+      console.log('[voice] sending clip:', (b64.length / 1024).toFixed(0), 'KB @16kHz int16');
       socket.emit('audio_clip', {
         session_id: SESSION_ID,
-        sample_rate: ctx.sampleRate,
-        pcm_b64: btoa(bin)
+        sample_rate: 16000,
+        format: 'int16',
+        pcm_b64: b64
       });
       clearInterval(recTick);
       vfVoiceState.className = 'vf-voice-state';
