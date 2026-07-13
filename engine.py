@@ -331,6 +331,7 @@ class AnalysisEngine:
         self._last_challenge_passed = None       # None until first challenge resolves
         self._last_deepfake_result = None
         self._last_audio_result = None
+        self._audio_window = deque(maxlen=10)  # HƏR SESSİYA üçün ayrı, paylaşılmır
         self._last_identity_result = None
         self._last_fusion = None
         self._last_df_time = 0.0                 # time-based heavy-inference gating
@@ -410,7 +411,14 @@ class AnalysisEngine:
         self.last_seen = time.time()
         try:
             with _infer_lock:
-                self._last_audio_result = self._audio.ensemble_score(pcm_float32)
+                raw = self._audio.score_pcm_no_state(pcm_float32)
+            raw_prob = raw.get("spoof_probability", 0.5)
+            self._audio_window.append(raw_prob)
+            self._last_audio_result = {
+                "spoof_probability": float(np.mean(self._audio_window)),
+                "model": raw.get("model"),
+                "raw_probability": raw_prob,
+            }
         except Exception as e:
             print(f"[ENGINE][WARN] audio scoring failed: {e}")
 
@@ -1039,20 +1047,25 @@ def analyze_file(path, is_video, max_frames=20):
         frames = []
         if is_video:
             cap = cv2.VideoCapture(path)
-            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-            sample_indices = None
-            if total > 0:
-                step = max(1, total // max_frames)
-                sample_indices = set(range(0, total, step))
-            idx = 0
-            while len(frames) < max_frames:
+            # CAP_PROP_FRAME_COUNT çox vaxt dəqiq deyil (VFR/kodek
+            # fərqləri) -- ona güvənmək eyni faylda fərqli freym
+            # seçilməsinə səbəb olur. Bunun əvəzinə klipi ardıcıl oxuyub
+            # (sərt limitlə), sonra bərabər aralıqla seçirik -- bu, eyni
+            # fayl üçün HƏMİŞƏ eyni nəticəni verir.
+            HARD_READ_CAP = 300
+            all_frames = []
+            while len(all_frames) < HARD_READ_CAP:
                 ok, frame = cap.read()
                 if not ok:
                     break
-                if sample_indices is None or idx in sample_indices:
-                    frames.append(frame)
-                idx += 1
+                all_frames.append(frame)
             cap.release()
+
+            if len(all_frames) <= max_frames:
+                frames = all_frames
+            else:
+                step = len(all_frames) / max_frames
+                frames = [all_frames[int(i * step)] for i in range(max_frames)]
         else:
             frame = cv2.imread(path)
             if frame is None:
@@ -1094,16 +1107,21 @@ def analyze_file(path, is_video, max_frames=20):
 
     mean_prob = float(np.mean(probs))
 
-    # ---- audio (video only) ----
     audio_prob, audio_note = None, ("image_has_no_audio" if not is_video else None)
     if is_video:
         pcm, audio_note = _extract_audio_16k(path)
         if pcm is not None:
             try:
                 with _infer_lock:
-                    audio_result = shared["audio"].ensemble_score(pcm)
+                    # score_pcm_no_state(): bu fayl üçün nəticə paylaşılan
+                    # canlı-sessiya pəncərəsinə (self.window) TOXUNMUR və
+                    # çıxarılmış audio-nun TAMAMINI (yalnız ilk 1s deyil)
+                    # skorlayır. ensemble_score() burada bug idi.
+                    audio_result = shared["audio"].score_pcm_no_state(pcm)
                 audio_prob = float(audio_result.get("spoof_probability"))
-                audio_note = "ok ({})".format(audio_result.get("model", "unknown"))
+                audio_note = "ok ({}, {} parça)".format(
+                    audio_result.get("model", "unknown"),
+                    audio_result.get("chunks_scored", 1))
             except Exception as e:
                 audio_note = f"audio_scoring_failed: {e}"
 
