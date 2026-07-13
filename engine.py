@@ -37,6 +37,7 @@ copied 1:1 from main.py / backend/app.py so backend's ingest mapping and
 the dashboard keep working unchanged.
 """
 import base64
+import hashlib
 import os
 import json
 import shutil
@@ -850,6 +851,122 @@ def drop_session(session_id):
 # ─────────────────────────────────────────────────────────────
 # Faza 3: offline full-pipeline analysis for /analyze-upload
 # ─────────────────────────────────────────────────────────────
+# Deterministic re-analysis: the same uploaded file always yields the same
+# verdict, and a repeat upload is instant. Bounded so a long session can't
+# grow it without limit (the teammates' version was unbounded).
+_upload_cache = {}
+_UPLOAD_CACHE_MAX = 32
+
+
+def _file_hash(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _cache_get(fhash):
+    return _upload_cache.get(fhash)
+
+
+def _cache_put(fhash, result):
+    if len(_upload_cache) >= _UPLOAD_CACHE_MAX:
+        _upload_cache.pop(next(iter(_upload_cache)))
+    _upload_cache[fhash] = result
+    return result
+
+
+# Audio-only verdict thresholds. The XGBoost model is calibrated so 0.5 is
+# its EER decision point, but on real TTS/voice-clone samples the team
+# measured spoof probabilities clustering at 0.25-0.45 - i.e. genuinely
+# synthetic audio often lands BELOW the calibrated point. A 0.30 flag
+# threshold is therefore empirical, not arbitrary; the band between 0.20
+# and 0.30 is reported as SUSPICIOUS rather than forced into a hard verdict.
+AUDIO_FAKE_THRESHOLD = 0.30
+AUDIO_SUSPICIOUS_THRESHOLD = 0.20
+
+
+def analyze_audio_file(path, max_seconds=8):
+    """Offline analysis for an audio-only upload (wav/mp3/m4a/flac/ogg/aac).
+
+    No visual signals exist, so visual_deepfake, liveness, identity and
+    injection are all excluded from the fusion (None), exactly as
+    analyze_file() already does for the signals that don't apply to it."""
+    fhash = _file_hash(path)
+    cached = _cache_get(fhash)
+    if cached is not None:
+        print("[ENGINE] upload cache hit (audio)")
+        return cached
+
+    shared = _get_shared()
+    try:
+        import librosa
+        y, _sr = librosa.load(path, sr=16000, mono=True, duration=max_seconds)
+    except Exception as e:
+        return {"error": f"could not decode audio: {e}. "
+                         f"(mp3/m4a need ffmpeg installed)"}
+
+    if y is None or len(y) < 1600:      # <100ms
+        return {"error": "audio too short or unreadable"}
+
+    y = y.astype(np.float32)
+    try:
+        with _infer_lock:
+            audio_result = shared["audio"].ensemble_score(y)
+    except Exception as e:
+        return {"error": f"audio scoring failed: {e}"}
+
+    audio_prob = float(audio_result.get("spoof_probability"))
+    duration_s = round(len(y) / 16000.0, 1)
+
+    trust_data = fuse_scores({
+        "identity": None,
+        "liveness": None,
+        "visual_deepfake": None,
+        "audio_spoof": 100 - audio_prob * 100,
+        "injection": None,
+    })
+
+    if audio_prob >= AUDIO_FAKE_THRESHOLD:
+        verdict = "FAKE"
+        confidence_pct = round(audio_prob * 100, 1)
+    elif audio_prob >= AUDIO_SUSPICIOUS_THRESHOLD:
+        verdict = "SUSPICIOUS"
+        confidence_pct = round(audio_prob * 100, 1)
+    else:
+        verdict = "REAL"
+        confidence_pct = round((1 - audio_prob) * 100, 1)
+
+    result = {
+        "verdict": verdict,
+        "confidence_pct": confidence_pct,
+        "media_kind": "audio",
+        "duration_sec": duration_s,
+        "frames_analyzed": 0,
+        "frames": [],
+        "model_backend": audio_result.get("model", "unknown"),
+        "full_pipeline": {
+            "trust_score": trust_data["trust_score"],
+            "trust_band": trust_data["band"],
+            "lowest_signal": trust_data["lowest_signal"],
+            "hard_deny_reasons": [],
+            "signals": {
+                "audio_spoof_probability": round(audio_prob, 4),
+                "visual_deepfake_probability": None,
+                "identity_continuity_min": None,
+                "identity_continuity_mean": None,
+                "spoof_frame_ratio": None,
+                "liveness": "not_applicable_audio_only",
+                "injection": "not_applicable_audio_only",
+            },
+            "audio_note": "ok ({}, {}s analysed)".format(
+                audio_result.get("model", "unknown"), duration_s),
+        },
+    }
+    return _cache_put(fhash, result)
+
+
 def _thumbnail_b64(frame, max_dim=160):
     h, w = frame.shape[:2]
     scale = max_dim / max(h, w)
@@ -905,6 +1022,12 @@ def analyze_file(path, is_video, max_frames=20):
     Returns a dict that keeps the legacy /analyze-upload response fields
     (verdict, confidence_pct, mean_deepfake_probability, frames_analyzed,
     model_backend, frames[]) and adds a "full_pipeline" block."""
+    fhash = _file_hash(path)
+    cached = _cache_get(fhash)
+    if cached is not None:
+        print("[ENGINE] upload cache hit (image/video)")
+        return cached
+
     shared = _get_shared()
     frame_results = []
     spoof_flags = []
@@ -1015,9 +1138,10 @@ def analyze_file(path, is_video, max_frames=20):
                          or trust_data["band"] == "fraud") else "REAL"
     confidence_pct = round((mean_prob if verdict == "FAKE" else 1 - mean_prob) * 100, 1)
 
-    return {
+    return _cache_put(fhash, {
         "verdict": verdict,
         "confidence_pct": confidence_pct,
+        "media_kind": "video" if is_video else "image",
         "mean_deepfake_probability": round(mean_prob, 4),
         "frames_analyzed": len(frame_results),
         "model_backend": getattr(shared["deepfake"], "backend", None) or "mock",
@@ -1038,4 +1162,4 @@ def analyze_file(path, is_video, max_frames=20):
             },
             "audio_note": audio_note,
         },
-    }
+    })

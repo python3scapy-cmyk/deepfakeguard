@@ -80,6 +80,7 @@ app.config['MAX_CONTENT_LENGTH'] = 150 * 1024 * 1024  # 150MB cap on uploads
 # runs the FULL pipeline via engine.analyze_file(), which reuses the
 # engine's shared SigLIP instance instead of loading a second ~370MB copy.
 ALLOWED_VIDEO_EXT = {"mp4", "mov", "avi", "webm", "mkv"}
+ALLOWED_AUDIO_EXT = {"wav", "mp3", "m4a", "flac", "ogg", "aac"}
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "bmp"}
 MAX_UPLOAD_FRAMES = 20  # mirrors the "Sequence Length" slider in your reference demo
 
@@ -489,7 +490,9 @@ def get_missing_signals():
 
 def _allowed_file(filename):
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    return (ext in ALLOWED_VIDEO_EXT or ext in ALLOWED_IMAGE_EXT), ext
+    ok = (ext in ALLOWED_VIDEO_EXT or ext in ALLOWED_IMAGE_EXT
+          or ext in ALLOWED_AUDIO_EXT)
+    return ok, ext
 
 
 @app.route('/analyze-upload', methods=['POST'])
@@ -514,10 +517,20 @@ def analyze_upload():
     f.save(tmp_path)
 
     is_video = ext in ALLOWED_VIDEO_EXT
+    is_audio = ext in ALLOWED_AUDIO_EXT
     try:
-        from engine import analyze_file
-        result = analyze_file(tmp_path, is_video=is_video,
-                              max_frames=MAX_UPLOAD_FRAMES)
+        from engine import analyze_file, analyze_audio_file
+        if is_audio:
+            result = analyze_audio_file(tmp_path)
+        else:
+            result = analyze_file(tmp_path, is_video=is_video,
+                                  max_frames=MAX_UPLOAD_FRAMES)
+    except Exception as e:
+        # Surface engine crashes instead of a bare 500 with no clue why.
+        import traceback
+        print("[ANALYZE_UPLOAD ERROR] " + str(e))
+        print(traceback.format_exc())
+        return jsonify({"error": "analysis engine crashed: " + str(e)}), 500
     finally:
         try:
             os.remove(tmp_path)

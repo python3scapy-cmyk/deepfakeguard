@@ -171,6 +171,7 @@
         .cascade-tooltip{cursor:help;border-bottom:1px dashed var(--text-muted);}
     </style>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<base target="_blank">
 </head>
 <script>
 // This block sits above <body>, so it MUST wait for DOMContentLoaded -
@@ -244,11 +245,28 @@ document.addEventListener('DOMContentLoaded', function(){
             bannerEl.style.color = 'var(--text-muted)';
             verdictIconEl.textContent = '';
         } else {
-            const isFake = data.verdict === 'FAKE';
-            verdictTextEl.textContent = 'Result: ' + data.verdict + ' (' + data.confidence_pct + '% confidence)';
-            bannerEl.style.background = isFake ? 'var(--danger-bg)' : 'var(--success-bg)';
-            bannerEl.style.color = isFake ? 'var(--danger)' : 'var(--success)';
-            verdictIconEl.textContent = isFake ? '👎' : '👍';
+            // Three-way rendering. SUSPICIOUS (which analyze_audio_file can
+            // now return) previously fell into the "not FAKE" branch and was
+            // painted GREEN - an ambiguous clip looked verified.
+            const kind = data.media_kind === 'audio' ? 'Audio'
+                       : data.media_kind === 'video' ? 'Video'
+                       : data.media_kind === 'image' ? 'Image' : 'Result';
+            let bg, fg, icon;
+            if (data.verdict === 'FAKE') {
+                bg = 'var(--danger-bg)';  fg = 'var(--danger)';  icon = '\uD83D\uDC4E';
+            } else if (data.verdict === 'SUSPICIOUS') {
+                bg = 'var(--bg-tertiary)'; fg = '#f59e0b';       icon = '\u26A0\uFE0F';
+            } else {
+                bg = 'var(--success-bg)'; fg = 'var(--success)'; icon = '\uD83D\uDC4D';
+            }
+            let txt = kind + ': ' + data.verdict + ' (' + data.confidence_pct + '% confidence)';
+            if (data.media_kind === 'audio' && data.duration_sec) {
+                txt += ' \u00B7 ' + data.duration_sec + 's analysed';
+            }
+            verdictTextEl.textContent = txt;
+            bannerEl.style.background = bg;
+            bannerEl.style.color = fg;
+            verdictIconEl.textContent = icon;
         }
 
         // ── Faza 3: full-pipeline detail line (trust, audio, continuity) ──
@@ -268,6 +286,9 @@ document.addEventListener('DOMContentLoaded', function(){
                 parts.push('Audio spoof: ' + Math.round(s.audio_spoof_probability * 100) + '%');
             } else {
                 parts.push('Audio: ' + (p.audio_note || 'n/a'));
+            }
+            if (data.media_kind === 'audio' && data.model_backend) {
+                parts.push('Model: ' + data.model_backend);
             }
             if (s.identity_continuity_min !== null && s.identity_continuity_min !== undefined) {
                 parts.push('Identity continuity: ' + Math.round(s.identity_continuity_min * 100) + '% min');
@@ -660,9 +681,9 @@ document.addEventListener('DOMContentLoaded', function(){
     </h3>
 
     <div id="uploadDropZone" style="border:1px dashed var(--border);border-radius:var(--radius-sm);padding:24px;text-align:center;cursor:pointer;">
-        <input type="file" id="uploadFileInput" accept="image/*,video/*" style="display:none;">
+        <input type="file" id="uploadFileInput" accept="image/*,video/*,audio/*" style="display:none;">
         <div style="color:var(--text-muted);font-size:13px;">
-            Drop a photo or video here, or <span style="color:var(--accent);font-weight:600;">browse</span>
+            Drop a photo, video, or audio file here, or <span style="color:var(--accent);font-weight:600;">browse</span>
         </div>
         <div id="uploadFileName" style="margin-top:6px;font-size:12px;color:var(--text-secondary);"></div>
     </div>
