@@ -245,6 +245,40 @@
   }
   .vf-reason[hidden]{display:none;}
 
+  .vf-voice{
+    display:flex;align-items:center;gap:10px;
+    padding:10px 14px;border-top:1px solid var(--line-soft);
+    font-family:var(--mono);font-size:11px;letter-spacing:.8px;
+    text-transform:uppercase;
+  }
+  .vf-voice[hidden]{display:none;}
+  .vf-voice-text{color:var(--indigo);font-weight:700;flex:1;}
+  .vf-voice-text.pass{color:var(--mint);}
+  .vf-voice-text.fail{color:var(--rose);}
+  .vf-voice-state{
+    font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink);
+    padding:2px 8px;border:1px solid var(--line);border-radius:6px;
+    white-space:nowrap;
+  }
+  .vf-voice-state.rec{color:var(--rose);border-color:var(--rose);}
+
+  .vf-final{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:11px 14px;border-top:1px solid var(--line-soft);
+  }
+  .vf-final[hidden]{display:none;}
+  .vf-final-text{
+    font-family:var(--mono);font-size:10px;letter-spacing:1.2px;
+    text-transform:uppercase;color:var(--ink-mute);
+  }
+  .vf-retry{
+    font-family:var(--mono);font-size:10px;letter-spacing:1.2px;
+    text-transform:uppercase;font-weight:700;cursor:pointer;
+    padding:7px 14px;border-radius:8px;
+    background:var(--indigo);color:#fff;border:none;
+  }
+  .vf-retry:hover{filter:brightness(1.1);}
+
   @media (max-width:560px){
     .head h1{font-size:20px;}
     .telemetry{grid-template-columns:repeat(2,1fr);}
@@ -507,7 +541,16 @@
     <span class="vf-ch-text" id="vfChallengeText">&mdash;</span>
     <span class="vf-ch-timer" id="vfChallengeTimer">&mdash;</span>
   </div>
+  <div class="vf-voice" id="vfVoice" hidden>
+    <span class="vf-ch-label">Voice</span>
+    <span class="vf-voice-text" id="vfVoiceText">&mdash;</span>
+    <span class="vf-voice-state" id="vfVoiceState">&mdash;</span>
+  </div>
   <div class="vf-reason" id="vfReason" hidden></div>
+  <div class="vf-final" id="vfFinal" hidden>
+    <span class="vf-final-text" id="vfFinalText">Verification complete</span>
+    <button class="vf-retry" id="vfRetry" type="button">Try again</button>
+  </div>
 </div>
 
 <div id="status">
@@ -862,7 +905,13 @@
             if (p.y<minY) minY=p.y; if (p.y>maxY) maxY=p.y;
           }
           box = { x:minX, y:minY, w:maxX-minX, h:maxY-minY };
-        } else { box = null; landmarks = null; }
+          // Eye Aspect Ratio from the mesh we're ALREADY computing here.
+          // The server has no eye landmarks (its detector is Haar-only), so
+          // blink detection there was reduced to an absolute-brightness
+          // heuristic that never fires in normal lighting. Sending a real
+          // EAR up with each analysis frame fixes blink_twice properly.
+          window.__DFG_EAR = earFromMesh(landmarks);
+        } else { box = null; landmarks = null; window.__DFG_EAR = null; }
       } catch(e){ box = detectHeuristic(data); landmarks = null; }
     } else {
       box = detectHeuristic(data);
@@ -973,6 +1022,24 @@
   // Same-origin socket: works on localhost:5000 AND through the HTTPS
   // cloudflared tunnel (the old hostname:5000 fallback broke tunneling).
   const socket = io();
+  /* MediaPipe FaceMesh eye landmarks -> Eye Aspect Ratio.
+     Vertical eyelid distance / horizontal eye width; ~0.3 open, ~0.1 shut. */
+  const EYE_L = { top: 159, bottom: 145, left: 33,  right: 133 };
+  const EYE_R = { top: 386, bottom: 374, left: 362, right: 263 };
+  function eyeRatio(lm, e) {
+    const dy = Math.hypot(lm[e.top].x - lm[e.bottom].x, lm[e.top].y - lm[e.bottom].y);
+    const dx = Math.hypot(lm[e.left].x - lm[e.right].x, lm[e.left].y - lm[e.right].y);
+    return dx > 0 ? dy / dx : null;
+  }
+  function earFromMesh(lm) {
+    if (!lm || lm.length < 468) return null;
+    try {
+      const l = eyeRatio(lm, EYE_L), r = eyeRatio(lm, EYE_R);
+      if (l === null || r === null) return null;
+      return (l + r) / 2;
+    } catch (_) { return null; }
+  }
+
   const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
   let pc, localStream;
 
@@ -981,7 +1048,7 @@
      AnalysisEngine over the SAME socket used for WebRTC signaling.
      Completely independent of the WebRTC peer connection — the
      dashboard video and the analysis pipeline never block each other. */
-  const SESSION_ID = 'web_' + Math.random().toString(16).slice(2, 10);
+  let SESSION_ID = 'web_' + Math.random().toString(16).slice(2, 10);
   // 10fps: a blink lasts ~150-300ms. At 5fps (200ms/frame) a whole blink
   // can fall BETWEEN two frames and the blink_twice challenge times out
   // even when the user obeys. 10fps guarantees 1-3 frames per blink.
@@ -1004,6 +1071,7 @@
       analysisCtx.drawImage(videoEl, 0, 0, analysisCanvas.width, analysisCanvas.height);
       socket.emit('analysis_frame', {
         session_id: SESSION_ID,
+        ear: (typeof window.__DFG_EAR === 'number') ? window.__DFG_EAR : null,
         jpg: analysisCanvas.toDataURL('image/jpeg', 0.7)
       });
     }, 1000 / ANALYSIS_FPS);
@@ -1032,6 +1100,9 @@
   const vfChText  = document.getElementById('vfChallengeText');
   const vfChTimer = document.getElementById('vfChallengeTimer');
   const vfReason  = document.getElementById('vfReason');
+  const vfVoice     = document.getElementById('vfVoice');
+  const vfVoiceText = document.getElementById('vfVoiceText');
+  const vfVoiceState= document.getElementById('vfVoiceState');
 
   let challengeDeadline = null;   // ms epoch; ticked locally between updates
   let challengeFlashUntil = 0;    // keep PASS/FAIL visible briefly
@@ -1056,6 +1127,8 @@
       audio_challenge_result: d.audio_challenge_result,
       factors: d.factors
     });
+
+    if (sessionFinal) return;   // ignore stragglers after finalization
 
     // Trust + band + verdict
     vfPanel.dataset.band = d.trust_band || '';
@@ -1089,34 +1162,38 @@
       return;
     }
 
-    // Voice challenge result flash
-    if (d.audio_challenge_result && d.audio_challenge_result.phrase
-        && d.audio_challenge_result.phrase === lastVoiceResultPhrase) {
-      // already shown
-    } else if (d.audio_challenge_result) {
-      lastVoiceResultPhrase = d.audio_challenge_result.phrase;
+    // ── VOICE row (its own element, so the vision flash can never
+    //    starve it - that ordering bug is why the prompt was invisible
+    //    and the clip recorded pure silence).
+    if (d.audio_challenge_result) {
       const r = d.audio_challenge_result;
-      vfCh.hidden = false;
-      vfChText.className = 'vf-ch-text ' + (r.passed ? 'pass' : 'fail');
-      vfChText.textContent = 'VOICE: "' + (r.phrase || '').toUpperCase() + '" — '
-        + (r.passed ? 'PASSED' : 'FAILED')
-        + (r.transcript ? ' (heard: "' + r.transcript + '")' : '');
-      vfChTimer.textContent = r.passed ? 'OK' : 'X';
-      challengeFlashUntil = Date.now() + 5000;
-      challengeDeadline = null;
-      setTimeout(() => { if (Date.now() >= challengeFlashUntil) vfCh.hidden = true; }, 5200);
-      return;
+      if (r.phrase !== lastVoiceResultPhrase) {
+        lastVoiceResultPhrase = r.phrase;
+        vfVoice.hidden = false;
+        vfVoiceText.className = 'vf-voice-text ' + (r.passed ? 'pass' : 'fail');
+        vfVoiceText.textContent = '"' + (r.phrase || '').toUpperCase() + '" — '
+          + (r.passed ? 'PASSED' : 'FAILED')
+          + (r.transcript ? ' (heard: "' + r.transcript + '")' : '');
+        vfVoiceState.className = 'vf-voice-state';
+        vfVoiceState.textContent = r.passed ? 'OK' : 'X';
+        if (!r.passed && r.reason) console.warn('[voice] failed:', r.reason);
+      }
+    } else if (d.active_audio_challenge && d.active_audio_challenge.phrase) {
+      const ph = d.active_audio_challenge.phrase;
+      vfVoice.hidden = false;
+      vfVoiceText.className = 'vf-voice-text';
+      vfVoiceText.textContent = 'SAY: "' + ph.toUpperCase() + '"';
+      if (voiceRecordedPhrase !== ph) {
+        voiceRecordedPhrase = ph;   // claim it now, record after a beat
+        vfVoiceState.className = 'vf-voice-state';
+        vfVoiceState.textContent = 'GET READY';
+        setTimeout(() => recordVoiceClip(ph), 1500);
+      }
     }
 
-    // Active VOICE challenge: show the phrase and start recording once
-    if (d.active_audio_challenge && d.active_audio_challenge.phrase) {
-      vfCh.hidden = false;
-      vfChText.className = 'vf-ch-text';
-      vfChText.textContent = 'SAY: "' + d.active_audio_challenge.phrase.toUpperCase() + '"';
-      challengeDeadline = Date.now() + (d.active_audio_challenge.remaining_sec || 0) * 1000;
-      if (voiceRecordedPhrase !== d.active_audio_challenge.phrase) {
-        recordVoiceClip(d.active_audio_challenge.phrase);
-      }
+    // Session finished: stop analysing, show retry
+    if (d.session_final) {
+      finalizeSession(d);
       return;
     }
 
@@ -1142,6 +1219,50 @@
     socket.emit('analysis_end', { session_id: SESSION_ID });
   });
 
+  /* ── Session finalization ─────────────────────────────────────
+     Once both factors resolve, the backend marks the session final.
+     Stop streaming frames (no endless re-challenging, no wasted CPU)
+     and offer an explicit retry that starts a genuinely NEW session. */
+  const vfFinal = document.getElementById('vfFinal');
+  const vfFinalText = document.getElementById('vfFinalText');
+  const vfRetry = document.getElementById('vfRetry');
+  let sessionFinal = false;
+
+  function finalizeSession(d) {
+    if (sessionFinal) return;
+    sessionFinal = true;
+    if (analysisTimer) { clearInterval(analysisTimer); analysisTimer = null; }
+    const granted = d.verdict === 'ACCESS GRANTED';
+    vfFinalText.textContent = granted
+      ? 'Verification complete — analysis stopped'
+      : 'Verification failed — analysis stopped';
+    vfFinal.hidden = false;
+    vfCh.hidden = true;
+    setStatus(granted ? 'Verified' : 'Not verified', granted);
+  }
+
+  vfRetry.addEventListener('click', () => {
+    socket.emit('analysis_end', { session_id: SESSION_ID });
+    SESSION_ID = 'web_' + Math.random().toString(16).slice(2, 10);
+    sessionFinal = false;
+    voiceRecordedPhrase = null;
+    lastVoiceResultPhrase = null;
+    challengeDeadline = null;
+    challengeFlashUntil = 0;
+    vfFinal.hidden = true;
+    vfReason.hidden = true;
+    vfCh.hidden = true;
+    vfVoice.hidden = true;
+    vfPanel.dataset.band = '';
+    vfTrust.textContent = '—';
+    vfFill.style.width = '0%';
+    vfBand.textContent = '—';
+    vfVerdict.textContent = 'Awaiting';
+    setStatus('Streaming to verifier', true);
+    startAnalysisStream();
+    console.log('[DFG] new session started:', SESSION_ID);
+  });
+
   /* ── Voice challenge (second auth factor) ─────────────────────
      When the backend issues an active_audio_challenge, record ~4.5s of
      mic audio as RAW float32 PCM via a ScriptProcessorNode (no server-
@@ -1150,10 +1271,16 @@
   let voiceRecording = false;
   let voiceRecordedPhrase = null;
 
-  function recordVoiceClip(phrase, seconds = 4.5) {
+  function recordVoiceClip(phrase, seconds = 6) {
     if (voiceRecording || !localStream) return;
     const track = localStream.getAudioTracks()[0];
-    if (!track) { console.warn('[voice] no audio track'); return; }
+    if (!track) {
+      console.warn('[voice] no audio track - microphone permission denied?');
+      vfVoiceText.className = 'vf-voice-text fail';
+      vfVoiceText.textContent = 'MICROPHONE NOT AVAILABLE — allow mic access';
+      vfVoiceState.textContent = 'X';
+      return;
+    }
     voiceRecording = true;
     voiceRecordedPhrase = phrase;
 
@@ -1163,6 +1290,17 @@
                 'ctx.state=', ctx.state, 'sampleRate=', ctx.sampleRate);
     const src = ctx.createMediaStreamSource(new MediaStream([track]));
     const proc = ctx.createScriptProcessor(4096, 1, 1);
+
+    // Visible recording state + countdown: users can't speak on cue if they
+    // can't tell when the mic is live.
+    let left = Math.ceil(seconds);
+    vfVoiceState.className = 'vf-voice-state rec';
+    vfVoiceState.textContent = '● REC ' + left + 's';
+    const recTick = setInterval(() => {
+      left -= 1;
+      if (left <= 0) { clearInterval(recTick); vfVoiceState.textContent = '● …'; }
+      else vfVoiceState.textContent = '● REC ' + left + 's';
+    }, 1000);
     const chunks = [];
     proc.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
     src.connect(proc);
@@ -1190,6 +1328,9 @@
         sample_rate: ctx.sampleRate,
         pcm_b64: btoa(bin)
       });
+      clearInterval(recTick);
+      vfVoiceState.className = 'vf-voice-state';
+      vfVoiceState.textContent = 'CHECKING';
       ctx.close();
       voiceRecording = false;
       console.log('[voice] clip sent (' + (total / ctx.sampleRate).toFixed(1) + 's)');

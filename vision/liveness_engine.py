@@ -9,6 +9,7 @@ runs the same way regardless of Python / MediaPipe version issues.
 """
 import random
 import time
+from collections import deque
 from enum import Enum
 
 import os
@@ -38,7 +39,10 @@ class LivenessChallengeEngine:
         self.state = ChallengeState.IDLE
         self.current_challenge = None
         self.challenge_start_time = 0.0
-        self.CHALLENGE_TIMEOUT = 15.0   # was 10 - users need time to read the prompt first
+        # 6s: long enough to read the prompt and act, short enough that a
+        # failed attempt doesn't stall the whole verification. Users
+        # consistently respond within ~2-3s once they see the prompt.
+        self.CHALLENGE_TIMEOUT = 6.0
         self.YAW_THRESHOLD = 15.0        # legacy absolute threshold (kept for payload compat)
         # Turn detection is now BASELINE-RELATIVE with PEAK tracking:
         #  - baseline = face position when the challenge was issued, so a
@@ -92,9 +96,20 @@ class LivenessChallengeEngine:
 
         self.blink_counter = 0
         self.last_blink_time = 0.0
-        self.BLINK_COOLDOWN = 0.5
+        self.BLINK_COOLDOWN = 0.35
         self.eye_dark_frames = 0
         self.EYE_DARK_CONSECUTIVE = 2
+        # REAL blink detection via Eye Aspect Ratio supplied by the caller
+        # (participant.html computes it from the MediaPipe mesh it already
+        # runs; main.py can pass None and keeps the legacy brightness path).
+        # The threshold is ADAPTIVE: eye shape varies hugely per person and
+        # per camera distance, so a fixed EAR cutoff either never fires or
+        # fires constantly. Baseline = a high percentile of recent open-eye
+        # EARs; a blink is a dip well below that, followed by recovery.
+        self.EAR_DROP_RATIO = 0.72     # dip below 72% of baseline = eye closing
+        self.EAR_RECOVER_RATIO = 0.85  # back above 85% = eye reopened
+        self._ear_history = deque(maxlen=90)
+        self._ear_closed = False
 
         self.challenges_pool = ["blink_twice", "turn_left", "turn_right"]
         self.completed_challenges = []
@@ -123,6 +138,37 @@ class LivenessChallengeEngine:
         return False
 
     # ---------- liveness signals ----------
+    def _update_blink_from_ear(self, ear):
+        """State machine on the real EAR: open -> closed -> open counts one
+        blink. Returns True on the frame a blink completes."""
+        if ear is None or ear <= 0:
+            return False
+        self._ear_history.append(float(ear))
+        if len(self._ear_history) < 8:
+            return False   # need a baseline first
+
+        baseline = float(np.percentile(self._ear_history, 80))
+        if baseline <= 0:
+            return False
+        ratio = ear / baseline
+
+        if not self._ear_closed:
+            if ratio < self.EAR_DROP_RATIO:
+                self._ear_closed = True
+            return False
+
+        # currently closed - wait for reopen
+        if ratio > self.EAR_RECOVER_RATIO:
+            self._ear_closed = False
+            now = time.time()
+            if now - self.last_blink_time > self.BLINK_COOLDOWN:
+                self.blink_counter += 1
+                self.last_blink_time = now
+                print(f"[LIVENESS] blink #{self.blink_counter} "
+                      f"(ear={ear:.3f} baseline={baseline:.3f})")
+                return True
+        return False
+
     def _detect_blink(self, frame, faces):
         if not _has_faces(faces):
             return False
@@ -170,13 +216,14 @@ class LivenessChallengeEngine:
         self.challenge_start_time = time.time()
         self.blink_counter = 0
         self.eye_dark_frames = 0
+        self._ear_closed = False
         self._yaw_baseline = None
         self._width_baseline = None
         self._peak_rel_yaw = 0.0
         self._turn_evidence = {"turn_left": False, "turn_right": False}
         return self.current_challenge
 
-    def process_frame(self, frame, faces=None, true_yaw=None):
+    def process_frame(self, frame, faces=None, true_yaw=None, ear=None):
         payload = {
             "state": self.state.value,
             "challenge_type": self.current_challenge,
@@ -245,8 +292,12 @@ class LivenessChallengeEngine:
             rel_yaw = 0.0
         payload["yaw"] = round(yaw, 1)
         payload["rel_yaw"] = round(rel_yaw, 1)
-        self._detect_blink(frame, faces)
+        if ear is not None:
+            self._update_blink_from_ear(ear)      # real EAR path (browser mesh)
+        else:
+            self._detect_blink(frame, faces)      # legacy brightness fallback
         payload["blink_count"] = self.blink_counter
+        payload["ear"] = round(ear, 3) if ear is not None else None
 
         if self.state == ChallengeState.CHALLENGE_ISSUED:
             self.state = ChallengeState.AWAITING_RESPONSE

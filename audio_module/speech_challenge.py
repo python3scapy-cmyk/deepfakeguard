@@ -122,8 +122,13 @@ class SpeechChallengeVerifier:
         n_frames = max(1, len(pcm) // frame_len)
         frames = pcm[:n_frames * frame_len].reshape(n_frames, frame_len)
         frame_rms = np.sqrt(np.mean(frames ** 2, axis=1))
-        voiced_ratio = float(np.mean(frame_rms > max(0.008, rms * 0.5)))
-        has_speech = rms > 0.005 and voiced_ratio > 0.15
+        voiced_ratio = float(np.mean(frame_rms > max(0.004, rms * 0.5)))
+        # Thresholds are deliberately permissive: the clip starts the moment
+        # the prompt appears, so its first second is usually silence while the
+        # user reads it. Requiring high overall RMS made every honest attempt
+        # fail with "no speech detected". Content verification (below) is what
+        # actually decides a pass when an ASR backend is present.
+        has_speech = rms > 0.0015 and voiced_ratio > 0.04
 
         base = {
             "mode": self._backend,
@@ -134,8 +139,10 @@ class SpeechChallengeVerifier:
         }
 
         if not has_speech:
+            print(f"[SPEECH] rejected clip: rms={rms:.4f} "
+                  f"voiced_ratio={voiced_ratio:.2f} (mic too quiet?)")
             base.update({"passed": False,
-                         "reason": "no speech detected in the clip"})
+                         "reason": f"no speech detected (rms={rms:.4f})"})
             base["latency_ms"] = round((time.time() - start) * 1000, 1)
             return base
 

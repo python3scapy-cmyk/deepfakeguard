@@ -61,14 +61,18 @@ from audio_module.speech_challenge import SpeechChallengeVerifier
 # ─────────────────────────────────────────────────────────────
 # Tunables (5 fps browser stream assumed)
 # ─────────────────────────────────────────────────────────────
-EMIT_EVERY = 10          # emit a fusion payload every N processed frames (~2s at 5fps)
+EMIT_EVERY = 5           # emit a fusion payload every N frames (~0.5s at 10fps)
 IDENTITY_EVERY = 15      # (legacy, local main.py cadence) - remote path is time-based below
 DEEPFAKE_EVERY = 3       # (legacy, local main.py cadence) - remote path is time-based below
-DF_INTERVAL_SEC = 1.2    # remote: SigLIP at most once per this interval
-ID_INTERVAL_SEC = 3.0    # remote: ArcFace at most once per this interval
+# Heavy models are the ONLY reason the pipeline ever feels slow: SigLIP is
+# 300-800ms and InsightFace 100-300ms on CPU, and every one of those runs
+# blocks a frame that the (millisecond-cheap) liveness path needed. Both
+# now run rarely, and NEVER while a challenge is on screen.
+DF_INTERVAL_SEC = 3.0    # remote: SigLIP at most once per 3s
+ID_INTERVAL_SEC = 6.0    # remote: ArcFace at most once per 6s
 NO_FACE_STREAK_DENY = 5  # consecutive face-less processed frames before hard deny
-CHALLENGE_COOLDOWN_FRAMES = 60
-CHALLENGE_TIMEOUT_SEC = 10.0
+CHALLENGE_COOLDOWN_FRAMES = 15   # ~1.5s at 10fps (was 6s of dead air)
+CHALLENGE_TIMEOUT_SEC = 6.0      # keep in sync with LivenessChallengeEngine
 SPOOF_WINDOW = 15        # same smoothing window as main.py
 SPOOF_MAJORITY = 0.6     # same majority threshold as main.py
 
@@ -341,6 +345,12 @@ class AnalysisEngine:
         self.audio_challenge = None            # {"phrase", "issued_at", "timeout_sec"}
         self._voice_grace_phrase = None        # phrase kept alive briefly past timeout
         self._voice_grace_until = 0.0
+        # Session finalization: once BOTH factors have resolved, the session
+        # reaches a final verdict and STOPS re-challenging. Re-running
+        # challenges forever after a decision is both bad UX and bad
+        # security theatre - a verification either concluded or it didn't.
+        self.session_final = False
+        self.final_verdict = None
         self._audio_challenge_result = None    # last verify() dict (buffered for emission)
         self._audio_challenge_done = False     # one voice factor per session (demo scope)
         self._audio_force_emit = False
@@ -405,7 +415,7 @@ class AnalysisEngine:
         return fuse_scores(scores)
 
     # ---------------- main entry point ----------------
-    def process_frame(self, frame_bgr):
+    def process_frame(self, frame_bgr, ear=None):
         """Analyze one frame. Returns a fusion payload dict every
         EMIT_EVERY frames, otherwise None.
 
@@ -418,12 +428,12 @@ class AnalysisEngine:
                 return None
             self._busy = True
         try:
-            return self._process_frame_inner(frame_bgr)
+            return self._process_frame_inner(frame_bgr, ear=ear)
         finally:
             with self._busy_lock:
                 self._busy = False
 
-    def _process_frame_inner(self, frame):
+    def _process_frame_inner(self, frame, ear=None):
         self.frame_count += 1
         now = time.time()
         self.last_seen = now
@@ -445,7 +455,7 @@ class AnalysisEngine:
         now0 = time.time()
         if (self._face_app is not None
                 and (turn_active or not _has_faces(faces))
-                and now0 - self._last_insight_ts >= 0.15):
+                and now0 - self._last_insight_ts >= 0.30):
             self._last_insight_ts = now0
             try:
                 with _infer_lock:
@@ -462,7 +472,7 @@ class AnalysisEngine:
                     insight_yaw = float(pose[1])
 
         _, liveness_payload = self.liveness_engine.process_frame(
-            frame, faces, true_yaw=insight_yaw)
+            frame, faces, true_yaw=insight_yaw, ear=ear)
 
         if liveness_payload.get("face_detected"):
             self._no_face_streak = 0
@@ -523,7 +533,8 @@ class AnalysisEngine:
             self.challenge_cooldown = self.frame_count + CHALLENGE_COOLDOWN_FRAMES
             self.liveness_engine.reset()
             force_emit = True   # participant HUD should see PASS/FAIL immediately
-        elif (not self.challenge_active
+        elif (not self.session_final
+                and not self.challenge_active
                 and self.frame_count > self.challenge_cooldown
                 and liveness_payload.get("face_detected")
                 and liveness_payload.get("state") == "IDLE"):
@@ -539,12 +550,14 @@ class AnalysisEngine:
         # otherwise a user stuck on turn challenges would never reach the
         # voice factor and the audio panel would sit "not connected"
         # forever (exactly the observed dashboard state).
-        if (self._last_challenge_passed is not None and not self._audio_challenge_done
+        if (not self.session_final
+                and self._last_challenge_passed is not None
+                and not self._audio_challenge_done
                 and self.audio_challenge is None and not self.challenge_active):
             self.audio_challenge = {
                 "phrase": self._speech.new_phrase(),
                 "issued_at": now,
-                "timeout_sec": 20.0,
+                "timeout_sec": 16.0,
             }
             force_emit = True
             print(f"[ENGINE][{self.session_id}] NEW VOICE CHALLENGE: "
@@ -637,6 +650,16 @@ class AnalysisEngine:
         }
         trust_data = self.compute_trust_score(scores)
 
+        # ---- finalize the session once both factors have resolved ----
+        if (not self.session_final
+                and self._last_challenge_passed is not None
+                and self._audio_challenge_done
+                and self.audio_challenge is None):
+            self.session_final = True
+            force_emit = True
+            print(f"[ENGINE][{self.session_id}] SESSION FINAL - "
+                  f"trust={trust_data['trust_score']} band={trust_data['band']}")
+
         # ---- emit fusion payload every EMIT_EVERY frames, or immediately
         # when a challenge is issued/resolved ----
         if not force_emit and self.frame_count % EMIT_EVERY != 0:
@@ -726,6 +749,7 @@ class AnalysisEngine:
                 "audio_challenge_passed": (self._audio_challenge_result.get("passed")
                                            if self._audio_challenge_result else None),
             },
+            "session_final": self.session_final,
             "source": "engine_remote" if self.remote else "engine_local",
         }
 

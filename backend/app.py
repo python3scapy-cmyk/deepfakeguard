@@ -1088,7 +1088,8 @@ def on_analysis_frame(data):
              {'message': 'Server at capacity - please wait a moment and retry'})
         return
 
-    fusion = eng.process_frame(frame)
+    ear = data.get('ear')
+    fusion = eng.process_frame(frame, ear=ear if isinstance(ear, (int, float)) else None)
     if fusion:
         ingest_fusion(fusion)  # dashboard sees it via the same /scores path
         emit('verdict_update', {
@@ -1107,6 +1108,7 @@ def on_analysis_frame(data):
             'active_audio_challenge': fusion.get('active_audio_challenge'),
             'audio_challenge_result': fusion.get('audio_challenge_result'),
             'factors': fusion.get('factors'),
+            'session_final': fusion.get('session_final', False),
         })
 
 
