@@ -55,6 +55,7 @@ from vision.liveness_engine import LivenessChallengeEngine
 from vision.deepfake_detector import DeepfakeDetector
 from audio_module.lip_sync import LipSyncDetector
 from audio_module.aasist_detector import AASISTDetector
+from audio_module.speech_challenge import SpeechChallengeVerifier
 
 
 # ─────────────────────────────────────────────────────────────
@@ -149,6 +150,7 @@ def _get_shared():
             print("[ENGINE] Loading shared models (first call only)...")
             _shared["deepfake"] = DeepfakeDetector()      # SigLIP (~370MB, cached after first download)
             _shared["audio"] = AASISTDetector()           # XGBoost ASVspoof checkpoint
+            _shared["speech"] = SpeechChallengeVerifier() # ASR loads lazily on first clip
             try:
                 from insightface.app import FaceAnalysis
                 face_app = FaceAnalysis(providers=["CPUExecutionProvider"])
@@ -330,11 +332,64 @@ class AnalysisEngine:
         self._last_id_time = 0.0
         self._no_face_streak = 0                 # consecutive processed frames without a face
 
+        # ---- audio (spoken-phrase) challenge - second auth factor ----
+        # Issued automatically once the FIRST vision challenge passes,
+        # so the demo flow is: vision factor -> voice factor.
+        self._speech = _get_shared()["speech"]
+        self._face_app = _get_shared().get("face_app")
+        self._last_insight_ts = 0.0
+        self.audio_challenge = None            # {"phrase", "issued_at", "timeout_sec"}
+        self._voice_grace_phrase = None        # phrase kept alive briefly past timeout
+        self._voice_grace_until = 0.0
+        self._audio_challenge_result = None    # last verify() dict (buffered for emission)
+        self._audio_challenge_done = False     # one voice factor per session (demo scope)
+        self._audio_force_emit = False
+
         self.last_seen = time.time()
         self._busy = False
         self._busy_lock = threading.Lock()
 
     # ---------------- audio ----------------
+    def process_audio_clip(self, pcm_16k_f32):
+        """A recorded voice-challenge clip from the browser. Runs BOTH
+        checks on the same audio: phrase verification (liveness: a live
+        human said the random phrase) and AASIST spoof scoring (the voice
+        is not synthetic/replayed). Result is attached to the next fusion
+        emission, which is forced so the participant sees it immediately."""
+        self.last_seen = time.time()
+        in_grace = (self.audio_challenge is None
+                    and self._voice_grace_phrase is not None
+                    and time.time() <= self._voice_grace_until)
+        if self.audio_challenge is None and not in_grace:
+            print(f"[ENGINE][{self.session_id}] audio clip received but no "
+                  f"active voice challenge - scoring spoof only")
+        elif in_grace:
+            phrase = self._voice_grace_phrase
+            self._voice_grace_phrase = None
+            result = self._speech.verify(pcm_16k_f32, phrase)
+            result["phrase"] = phrase
+            result["reason"] = (result.get("reason") or "") + " (late clip - grace window)"
+            self._audio_challenge_result = result
+            self._audio_force_emit = True
+            print(f"[ENGINE][{self.session_id}] VOICE CHALLENGE (grace) "
+                  f"{'PASSED' if result['passed'] else 'FAILED'}: {result.get('reason')}")
+        else:
+            result = self._speech.verify(pcm_16k_f32,
+                                         self.audio_challenge["phrase"])
+            result["phrase"] = self.audio_challenge["phrase"]
+            self._audio_challenge_result = result
+            self._audio_challenge_done = True
+            self.audio_challenge = None
+            self._audio_force_emit = True
+            print(f"[ENGINE][{self.session_id}] VOICE CHALLENGE "
+                  f"{'PASSED' if result['passed'] else 'FAILED'}: "
+                  f"{result.get('reason')}")
+        try:
+            with _infer_lock:
+                self._last_audio_result = self._audio.ensemble_score(pcm_16k_f32)
+        except Exception as e:
+            print(f"[ENGINE][WARN] audio spoof scoring failed: {e}")
+
     def process_audio(self, pcm_float32):
         """Feed ~1s of 16kHz mono float32 PCM from the browser (Faza 1/P1).
         Safe to never call - audio signal then stays neutral (50)."""
@@ -375,7 +430,39 @@ class AnalysisEngine:
 
         # ---- vision + liveness (same order as main.py) ----
         faces, vision_payload = self.vision_detector.process_frame(frame)
-        _, liveness_payload = self.liveness_engine.process_frame(frame, faces)
+
+        # SCRFD fallback + REAL head yaw. Haar (frontal) collapses on
+        # pitched-down faces (users look DOWN to read the prompt panel
+        # under the video - confirmed frame-by-frame on a user recording)
+        # and on turned faces. InsightFace is already loaded for identity;
+        # its detector is robust to pitch/turn AND its 3D pose gives true
+        # yaw in degrees, which the liveness engine treats as definitive
+        # turn evidence. Run it only when it matters (turn challenge
+        # active, or Haar found nothing), throttled to ~6/sec.
+        insight_yaw = None
+        turn_active = (self.challenge_active
+                       and self.active_challenge_type in ("turn_left", "turn_right"))
+        now0 = time.time()
+        if (self._face_app is not None
+                and (turn_active or not _has_faces(faces))
+                and now0 - self._last_insight_ts >= 0.15):
+            self._last_insight_ts = now0
+            try:
+                with _infer_lock:
+                    dets = self._face_app.get(frame)
+            except Exception:
+                dets = []
+            if len(dets) > 0:
+                f0 = max(dets, key=lambda d: (d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1]))
+                x1, y1, x2, y2 = [int(v) for v in f0.bbox]
+                if not _has_faces(faces):
+                    faces = [(max(0, x1), max(0, y1), max(1, x2 - x1), max(1, y2 - y1))]
+                pose = getattr(f0, "pose", None)
+                if pose is not None and len(pose) >= 2:
+                    insight_yaw = float(pose[1])
+
+        _, liveness_payload = self.liveness_engine.process_frame(
+            frame, faces, true_yaw=insight_yaw)
 
         if liveness_payload.get("face_detected"):
             self._no_face_streak = 0
@@ -446,6 +533,48 @@ class AnalysisEngine:
             force_emit = True   # announce the prompt without waiting for the next %EMIT frame
             print(f"[ENGINE][{self.session_id}] NEW CHALLENGE: {new_challenge}")
 
+        # ---- voice challenge lifecycle ----
+        # Voice is an INDEPENDENT second factor: it fires once the first
+        # vision challenge RESOLVES (pass or fail), not only on success -
+        # otherwise a user stuck on turn challenges would never reach the
+        # voice factor and the audio panel would sit "not connected"
+        # forever (exactly the observed dashboard state).
+        if (self._last_challenge_passed is not None and not self._audio_challenge_done
+                and self.audio_challenge is None and not self.challenge_active):
+            self.audio_challenge = {
+                "phrase": self._speech.new_phrase(),
+                "issued_at": now,
+                "timeout_sec": 20.0,
+            }
+            force_emit = True
+            print(f"[ENGINE][{self.session_id}] NEW VOICE CHALLENGE: "
+                  f"say '{self.audio_challenge['phrase']}'")
+        if (self.audio_challenge is not None
+                and now - self.audio_challenge["issued_at"] > self.audio_challenge["timeout_sec"]):
+            self._audio_challenge_result = {
+                "passed": False, "mode": "timeout",
+                "phrase": self.audio_challenge["phrase"],
+                "expected_phrase": self.audio_challenge["phrase"],
+                "transcript": None, "match_ratio": 0.0,
+                "reason": "no voice response within the time limit",
+            }
+            self._audio_challenge_done = True
+            self._voice_grace_phrase = self.audio_challenge["phrase"]
+            self._voice_grace_until = now + 20.0   # late-clip grace window
+            self.audio_challenge = None
+            force_emit = True
+        if self._audio_force_emit:
+            force_emit = True
+            self._audio_force_emit = False
+
+        active_audio_challenge = None
+        if self.audio_challenge is not None:
+            active_audio_challenge = {
+                "phrase": self.audio_challenge["phrase"],
+                "remaining_sec": max(0, int(self.audio_challenge["timeout_sec"]
+                                            - (now - self.audio_challenge["issued_at"]))),
+            }
+
         active_challenge = None
         if self.challenge_active:
             elapsed = time.time() - self.liveness_engine.challenge_start_time
@@ -480,6 +609,11 @@ class AnalysisEngine:
             audio_trust = 100 - float(self._last_audio_result.get("spoof_probability", 0.5)) * 100
         else:
             audio_trust = None  # no audio data -> excluded from weights
+        # A failed voice challenge is strong negative evidence regardless of
+        # what AASIST thought of the raw signal.
+        if (self._audio_challenge_result is not None
+                and self._audio_challenge_result.get("passed") is False):
+            audio_trust = min(audio_trust, 25) if audio_trust is not None else 25
 
         if anti_spoof_2d_flag:
             liveness_trust = 20
@@ -511,6 +645,7 @@ class AnalysisEngine:
         fusion = self._generate_fusion(
             liveness_payload, spoof_analysis, anti_spoof_2d_flag,
             trust_data, sync_result, identity_result, active_challenge,
+            active_audio_challenge,
         )
         self._pending_challenge_result = None  # consumed by this emission
         self._last_fusion = fusion
@@ -518,7 +653,8 @@ class AnalysisEngine:
 
     # ---------------- payload builder (1:1 field parity with main.py) ----------------
     def _generate_fusion(self, liveness_payload, spoof_analysis, anti_spoof_2d_flag,
-                         trust_data, sync_result, identity_result, active_challenge):
+                         trust_data, sync_result, identity_result, active_challenge,
+                         active_audio_challenge=None):
         challenge = self._pending_challenge_result
         face_detected = liveness_payload.get("face_detected", False)
         multi_face = liveness_payload.get("multi_face", False)
@@ -582,6 +718,14 @@ class AnalysisEngine:
             # Extra (not in main.py): lets participant.html render the
             # prompt + countdown. backend/app.py ignores unknown keys.
             "active_challenge": active_challenge,
+            # Voice (second) factor - Faza Audio:
+            "active_audio_challenge": active_audio_challenge,
+            "audio_challenge_result": self._audio_challenge_result,
+            "factors": {
+                "vision_challenge_passed": self._last_challenge_passed,
+                "audio_challenge_passed": (self._audio_challenge_result.get("passed")
+                                           if self._audio_challenge_result else None),
+            },
             "source": "engine_remote" if self.remote else "engine_local",
         }
 
@@ -606,6 +750,19 @@ class AnalysisEngine:
 # ─────────────────────────────────────────────────────────────
 # Tiny session manager (backend will use this in Faza 1)
 # ─────────────────────────────────────────────────────────────
+def warm_up():
+    """Preload every shared model (SigLIP, XGBoost audio, InsightFace, and
+    the Whisper ASR) at backend startup instead of on the first live frame/
+    clip - first-use latency killed the first voice challenge of a session
+    (75MB whisper download/load > challenge timeout)."""
+    shared = _get_shared()
+    try:
+        shared["speech"]._ensure_loaded()
+    except Exception as e:
+        print(f"[ENGINE][WARN] speech warm-up failed: {e}")
+    print("[ENGINE] Warm-up complete - all shared models resident")
+
+
 ENGINES = {}
 _engines_lock = threading.Lock()
 MAX_ACTIVE_SESSIONS = 3

@@ -1099,6 +1099,14 @@ def on_analysis_frame(data):
             'hard_deny_reasons': fusion['hard_deny_reasons'],
             'active_challenge': fusion.get('active_challenge'),
             'challenge_result': fusion.get('challenge_result'),
+            # Voice (2nd factor) fields - previously computed in engine.py's
+            # fusion payload but never forwarded here, so participant.html
+            # never received them no matter how correct the backend logs
+            # looked. Bug found by comparing backend logs (NEW VOICE
+            # CHALLENGE fired) against browser console (nothing arrived).
+            'active_audio_challenge': fusion.get('active_audio_challenge'),
+            'audio_challenge_result': fusion.get('audio_challenge_result'),
+            'factors': fusion.get('factors'),
         })
 
 
@@ -1107,6 +1115,35 @@ def on_analysis_end(data):
     sid = (data or {}).get('session_id')
     if sid:
         drop_session(sid)
+
+
+@socketio.on('audio_clip')
+def on_audio_clip(data):
+    """Voice-challenge clip from participant.html: raw little-endian
+    float32 PCM (base64) + its sample_rate. Resampled to 16k here (simple
+    linear interp - fine for speech) and handed to the session engine,
+    which runs phrase verification + AASIST spoof scoring on it."""
+    sid = (data or {}).get('session_id')
+    b64 = (data or {}).get('pcm_b64', '')
+    sr = int((data or {}).get('sample_rate', 48000))
+    if not sid or not b64:
+        return
+    try:
+        pcm = np.frombuffer(base64.b64decode(b64), dtype=np.float32)
+    except Exception:
+        return
+    print(f"[AUDIO] clip received: session={sid} {pcm.size/sr:.1f}s @ {sr}Hz "
+          f"peak={float(np.abs(pcm).max()):.3f}")
+    if pcm.size < sr // 4:   # <250ms is useless
+        return
+    if sr != 16000:
+        target_len = int(len(pcm) * 16000 / sr)
+        pcm = np.interp(np.linspace(0, len(pcm) - 1, target_len),
+                        np.arange(len(pcm)), pcm).astype(np.float32)
+    eng = get_engine(sid, remote=True)
+    if eng is None:
+        return
+    eng.process_audio_clip(pcm)
 
 
 # ─────────────────────────────────────────────
@@ -1135,4 +1172,12 @@ def frontend_static(fname):
 
 
 if __name__ == '__main__':
+    # Preload all shared models (deepfake, audio, InsightFace, Whisper ASR)
+    # in the background so the FIRST participant's challenges aren't hit by
+    # cold-start model downloads/loads.
+    import threading as _threading
+    from engine import warm_up as _warm_up
+    _threading.Thread(target=_warm_up, daemon=True,
+                      name="model-warmup").start()
+
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)

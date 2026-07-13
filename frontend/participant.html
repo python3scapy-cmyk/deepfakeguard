@@ -1035,6 +1035,7 @@
 
   let challengeDeadline = null;   // ms epoch; ticked locally between updates
   let challengeFlashUntil = 0;    // keep PASS/FAIL visible briefly
+  let lastVoiceResultPhrase = null;
 
   setInterval(() => {             // 4Hz local countdown between server emits
     const now = Date.now();
@@ -1046,6 +1047,16 @@
   }, 250);
 
   socket.on('verdict_update', (d) => {
+    // TEMP DIAGNOSTIC (remove once voice challenge is confirmed working):
+    // dumps the exact fields the voice-challenge UI logic branches on.
+    console.log('[VU]', {
+      challenge_result: d.challenge_result,
+      active_challenge: d.active_challenge,
+      active_audio_challenge: d.active_audio_challenge,
+      audio_challenge_result: d.audio_challenge_result,
+      factors: d.factors
+    });
+
     // Trust + band + verdict
     vfPanel.dataset.band = d.trust_band || '';
     vfTrust.textContent  = (d.trust_score !== undefined && d.trust_score !== null)
@@ -1078,7 +1089,38 @@
       return;
     }
 
-    // Active challenge prompt + countdown
+    // Voice challenge result flash
+    if (d.audio_challenge_result && d.audio_challenge_result.phrase
+        && d.audio_challenge_result.phrase === lastVoiceResultPhrase) {
+      // already shown
+    } else if (d.audio_challenge_result) {
+      lastVoiceResultPhrase = d.audio_challenge_result.phrase;
+      const r = d.audio_challenge_result;
+      vfCh.hidden = false;
+      vfChText.className = 'vf-ch-text ' + (r.passed ? 'pass' : 'fail');
+      vfChText.textContent = 'VOICE: "' + (r.phrase || '').toUpperCase() + '" — '
+        + (r.passed ? 'PASSED' : 'FAILED')
+        + (r.transcript ? ' (heard: "' + r.transcript + '")' : '');
+      vfChTimer.textContent = r.passed ? 'OK' : 'X';
+      challengeFlashUntil = Date.now() + 5000;
+      challengeDeadline = null;
+      setTimeout(() => { if (Date.now() >= challengeFlashUntil) vfCh.hidden = true; }, 5200);
+      return;
+    }
+
+    // Active VOICE challenge: show the phrase and start recording once
+    if (d.active_audio_challenge && d.active_audio_challenge.phrase) {
+      vfCh.hidden = false;
+      vfChText.className = 'vf-ch-text';
+      vfChText.textContent = 'SAY: "' + d.active_audio_challenge.phrase.toUpperCase() + '"';
+      challengeDeadline = Date.now() + (d.active_audio_challenge.remaining_sec || 0) * 1000;
+      if (voiceRecordedPhrase !== d.active_audio_challenge.phrase) {
+        recordVoiceClip(d.active_audio_challenge.phrase);
+      }
+      return;
+    }
+
+    // Active vision challenge prompt + countdown
     if (d.active_challenge && d.active_challenge.challenge_type) {
       vfCh.hidden = false;
       vfChText.className = 'vf-ch-text';
@@ -1099,6 +1141,60 @@
   window.addEventListener('beforeunload', () => {
     socket.emit('analysis_end', { session_id: SESSION_ID });
   });
+
+  /* ── Voice challenge (second auth factor) ─────────────────────
+     When the backend issues an active_audio_challenge, record ~4.5s of
+     mic audio as RAW float32 PCM via a ScriptProcessorNode (no server-
+     side codec/ffmpeg needed), downsample metadata travels with it, and
+     ship it over the same socket. One recording per issued phrase. */
+  let voiceRecording = false;
+  let voiceRecordedPhrase = null;
+
+  function recordVoiceClip(phrase, seconds = 4.5) {
+    if (voiceRecording || !localStream) return;
+    const track = localStream.getAudioTracks()[0];
+    if (!track) { console.warn('[voice] no audio track'); return; }
+    voiceRecording = true;
+    voiceRecordedPhrase = phrase;
+
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') ctx.resume();   // autoplay policy guard
+    console.log('[voice] recording started for phrase:', phrase,
+                'ctx.state=', ctx.state, 'sampleRate=', ctx.sampleRate);
+    const src = ctx.createMediaStreamSource(new MediaStream([track]));
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    const chunks = [];
+    proc.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    src.connect(proc);
+    proc.connect(ctx.destination);
+
+    setTimeout(() => {
+      try { proc.disconnect(); src.disconnect(); } catch (_) {}
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const pcm = new Float32Array(total);
+      let off = 0;
+      for (const c of chunks) { pcm.set(c, off); off += c.length; }
+      // base64-encode the raw float32 bytes
+      const bytes = new Uint8Array(pcm.buffer);
+      let bin = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+      }
+      let peak = 0;
+      for (let i = 0; i < pcm.length; i += 50) peak = Math.max(peak, Math.abs(pcm[i]));
+      console.log('[voice] clip peak level:', peak.toFixed(3),
+                  peak < 0.01 ? '(SILENT?! check mic/permissions)' : '(ok)');
+      socket.emit('audio_clip', {
+        session_id: SESSION_ID,
+        sample_rate: ctx.sampleRate,
+        pcm_b64: btoa(bin)
+      });
+      ctx.close();
+      voiceRecording = false;
+      console.log('[voice] clip sent (' + (total / ctx.sampleRate).toFixed(1) + 's)');
+    }, seconds * 1000);
+  }
 
   document.getElementById('railSession').textContent = 'Room · ' + ROOM;
 
