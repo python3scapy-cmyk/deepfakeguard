@@ -245,6 +245,27 @@
   }
   .vf-reason[hidden]{display:none;}
 
+  .vf-camera{
+    display:flex;align-items:center;gap:10px;
+    padding:10px 14px;border-top:1px solid var(--line-soft);
+    font-family:var(--mono);font-size:11px;letter-spacing:.8px;
+    text-transform:uppercase;
+  }
+  .vf-camera-text{color:var(--ink);font-weight:700;flex:1;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .vf-camera-text.physical{color:var(--mint);}
+  .vf-camera-text.virtual{color:var(--rose);}
+  .vf-camera-text.suspect{color:var(--amber);}
+  .vf-camera-text.unknown{color:var(--ink-mute);}
+  .vf-camera-tag{
+    font-weight:700;font-size:9.5px;letter-spacing:1px;
+    padding:2px 8px;border:1px solid var(--line);border-radius:6px;
+    white-space:nowrap;color:var(--ink-mute);
+  }
+  .vf-camera-tag.physical{color:var(--mint);border-color:rgba(34,201,122,.35);}
+  .vf-camera-tag.virtual{color:var(--rose);border-color:rgba(255,90,90,.35);}
+  .vf-camera-tag.suspect{color:var(--amber);border-color:rgba(246,200,66,.35);}
+
   .vf-voice{
     display:flex;align-items:center;gap:10px;
     padding:10px 14px;border-top:1px solid var(--line-soft);
@@ -576,6 +597,11 @@
       <div class="vf-k">Verdict</div>
       <div class="vf-v" id="vfVerdict">Awaiting</div>
     </div>
+  </div>
+  <div class="vf-camera" id="vfCamera">
+    <span class="vf-ch-label">Camera</span>
+    <span class="vf-camera-text unknown" id="vfCameraText">Detecting…</span>
+    <span class="vf-camera-tag" id="vfCameraTag">&mdash;</span>
   </div>
   <div class="vf-challenge" id="vfChallenge" hidden>
     <span class="vf-ch-label">Liveness</span>
@@ -1441,6 +1467,42 @@
 
   document.getElementById('railSession').textContent = 'Session · ' + ROOM;
 
+  // ── Camera identification (display-only, browser-side) ──────
+  // Mirrors security/device_check.py's HARD/SOFT lists. Kept in sync
+  // manually for now — if that file's lists change, update here too.
+  // This does NOT talk to the backend and does NOT affect trust score;
+  // it only tells the participant, visually, what device is live.
+  const HARD_VIRTUAL_CAMERA_NAMES = [
+    'OBS Virtual Camera', 'OBS-Camera', 'Snap Camera', 'ManyCam',
+    'Iriun Webcam', 'Iriun', 'EpocCam', 'DroidCam', 'iVCam', 'NDI Webcam',
+    'XSplit VCam', 'SplitCam', 'AlterCam', 'FineCam', 'Reincubate Camo',
+    'e2eSoft', 'Virtual Camera', 'Virtual Webcam'
+  ];
+  const SOFT_VIRTUAL_CAMERA_NAMES = [
+    'NVIDIA Broadcast', 'Continuity Camera', 'Logi Capture',
+    'CyberLink YouCam', 'mmhmm'
+  ];
+
+  function classifyCameraLabel(label) {
+    const l = (label || '').toLowerCase();
+    if (!l) return { cls: 'unknown', tag: 'UNKNOWN', name: 'Unknown device' };
+    const hard = HARD_VIRTUAL_CAMERA_NAMES.find(n => l.includes(n.toLowerCase()));
+    if (hard) return { cls: 'virtual', tag: 'VIRTUAL', name: label };
+    const soft = SOFT_VIRTUAL_CAMERA_NAMES.find(n => l.includes(n.toLowerCase()));
+    if (soft) return { cls: 'suspect', tag: 'SUSPECT', name: label };
+    return { cls: 'physical', tag: 'PHYSICAL', name: label };
+  }
+
+  function showCameraInfo(track) {
+    const label = (track && track.label) ? track.label : '';
+    const info = classifyCameraLabel(label);
+    const textEl = document.getElementById('vfCameraText');
+    const tagEl = document.getElementById('vfCameraTag');
+    if (textEl) { textEl.textContent = info.name; textEl.className = 'vf-camera-text ' + info.cls; }
+    if (tagEl) { tagEl.textContent = info.tag; tagEl.className = 'vf-camera-tag ' + (info.cls === 'unknown' ? '' : info.cls); }
+    console.log('[DFG] active camera:', info.name, '->', info.cls);
+  }
+
   function setStatus(text, live) {
     document.getElementById('statusText').textContent = text;
     document.getElementById('statusDot').className = 'dot ' + (live ? 'live' : 'off');
@@ -1458,10 +1520,23 @@
     try {
       localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       document.getElementById('localPreview').srcObject = localStream;
+
+      // Show which camera the browser is actually streaming from. The
+      // track label is the only reliable source for this — OS-level
+      // enumeration on the backend can't see it (device lives on the
+      // participant's machine, not the server), and it can't distinguish
+      // "installed" from "in use". This is display-only for now: runs
+      // entirely in this browser, no backend call, no trust-score change.
+      showCameraInfo(localStream.getVideoTracks()[0]);
+
       startAnalysisStream();   // Faza 1: begin feeding the analysis engine
     } catch (err) {
       console.error('getUserMedia failed:', err);
       setStatus('Camera or microphone unavailable', false);
+      const vfCamErrText = document.getElementById('vfCameraText');
+      const vfCamErrTag = document.getElementById('vfCameraTag');
+      if (vfCamErrText) { vfCamErrText.textContent = 'Unavailable'; vfCamErrText.className = 'vf-camera-text unknown'; }
+      if (vfCamErrTag) { vfCamErrTag.textContent = 'NO ACCESS'; vfCamErrTag.className = 'vf-camera-tag'; }
       _starting = false;
       window.showConsentError();
       return;
