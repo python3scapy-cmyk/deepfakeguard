@@ -3,4 +3,4 @@ venv/
 __pycache__/
 *.pyc
 audio_module/feats_*.npz
-security/eval_sessions.jsonl
+security/eval_sessions.jsonlbackend/admin_pin.json
