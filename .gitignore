@@ -1,9 +1,8 @@
-venv/ 
-.cache/ 
+venv/
+.cache/
 __pycache__/
 *.pyc
 audio_module/feats_*.npz
-security/eval_sessions.jsonlbackend/admin_pin.json
-
+security/eval_sessions.jsonl
 backend/admin_pin.json
 audio_module/train_xgb.pycls
