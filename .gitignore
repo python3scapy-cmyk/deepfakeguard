@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 audio_module/feats_*.npz
 security/eval_sessions.jsonlbackend/admin_pin.json
+
+backend/admin_pin.json
+audio_module/train_xgb.pycls
