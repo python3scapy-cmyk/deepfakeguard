@@ -15,14 +15,26 @@
   *{box-sizing:border-box;margin:0;padding:0;}
   body{
     min-height:100vh;background:var(--bg);color:var(--ink);
-    font-family:var(--sans);display:flex;align-items:center;
-    justify-content:center;padding:24px;
+    font-family:var(--sans);
     background-image:
       linear-gradient(rgba(30,39,64,.35) 1px,transparent 1px),
       linear-gradient(90deg,rgba(30,39,64,.35) 1px,transparent 1px);
     background-size:44px 44px;
   }
-  .wrap{width:100%;max-width:760px;}
+  .wrap{width:100%;max-width:760px;margin:0 auto;padding:60px 24px 70px;}
+  .nav{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:20px 28px;border-bottom:1px solid var(--line);
+  }
+  .nav .brand{margin-bottom:0;text-decoration:none;}
+  .links{display:flex;gap:6px;}
+  .links a{
+    padding:7px 13px;border-radius:8px;text-decoration:none;
+    font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:1.3px;
+    text-transform:uppercase;color:var(--ink-mute);transition:.15s;
+  }
+  .links a:hover{color:var(--ink);background:var(--panel);}
+  .links a.on{color:var(--ink);background:var(--panel);border:1px solid var(--line);}
   .brand{
     display:flex;align-items:center;gap:9px;margin-bottom:34px;
     font-family:var(--mono);font-size:11px;font-weight:700;
@@ -63,8 +75,16 @@
 </style>
 </head>
 <body>
+<nav class="nav">
+  <a class="brand" href="/"><i></i> DeepfakeGuard</a>
+  <div class="links">
+    <a href="/" class="on">Home</a>
+    <a href="/about">About</a>
+    <a href="/contact">Contact</a>
+  </div>
+</nav>
+
 <div class="wrap">
-  <div class="brand"><i></i> DeepfakeGuard</div>
 
   <h1>Real-time identity verification<br>against synthetic media</h1>
   <p class="sub">
@@ -95,7 +115,11 @@
     </a>
   </div>
 
-  <div class="foot">Multi-modal fusion &middot; Face &middot; Liveness &middot; Voice &middot; Injection</div>
+  <div class="foot">
+    Multi-modal fusion &middot; Face &middot; Liveness &middot; Voice &middot; Injection
+    &nbsp;&middot;&nbsp; <a href="mailto:python3scapy@gmail.com"
+      style="color:var(--indigo);text-decoration:none;">python3scapy@gmail.com</a>
+  </div>
 </div>
 </body>
 </html>

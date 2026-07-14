@@ -104,11 +104,6 @@ class ClientState:
         # Rolling summary for the admin's client list
         self.summary = {"trust_score": None, "band": None, "verdict": None,
                         "session_final": False}
-        # Camera identity, as classified client-side in participant.html
-        # (browser is the only place that can read the MediaStreamTrack
-        # label). Display-only — never affects the trust score.
-        self.camera_name = None
-        self.camera_class = None
 
     def touch(self):
         self.last_active = time.time()
@@ -1140,10 +1135,6 @@ def get_scores():
             "injection_risk": score_to_tier(flat_scores["injection_risk_score"])  if flat_scores.get("injection_risk_score")  is not None else None
         },
         "signal_missing": signal_missing,
-        "camera": {
-            "name":  state.camera_name,
-            "class": state.camera_class,   # "physical" | "suspect" | "virtual" | None
-        },
         "modules_reporting": [k for k, v in state.latest_scores.items() if v is not None],
         "session_log": state.session_log[-30:],
         # Admin view: who else is verifying in this room right now.
@@ -1290,15 +1281,6 @@ def on_analysis_frame(data):
         yaw_ratio=yaw_ratio if isinstance(yaw_ratio, (int, float)) else None)
     if fusion:
         state = room.client(sid)          # per-client state, not a global one
-        # Camera label is display-only and sent on every frame, but only
-        # bother updating state (and logging) when it actually changes —
-        # avoids a log line 10x/sec.
-        cam_name = data.get('camera_name')
-        cam_class = data.get('camera_class')
-        if cam_name and cam_name != state.camera_name:
-            state.camera_name = cam_name
-            state.camera_class = cam_class
-            print(f"[ROOM {room.code}] {sid} camera: {cam_name} ({cam_class})")
         ingest_fusion(fusion, state)
         state.summary = {
             "trust_score": fusion.get("trust_score"),
@@ -1452,6 +1434,119 @@ def landing_page():
 @app.route('/admin')
 def admin_page():
     return send_from_directory(FRONTEND_DIR, 'index.html')
+
+
+@app.route('/about')
+def about_page():
+    return send_from_directory(FRONTEND_DIR, 'about.html')
+
+
+@app.route('/contact')
+def contact_page():
+    return send_from_directory(FRONTEND_DIR, 'contact.html')
+
+
+# ─────────────────────────────────────────────
+# Contact form
+#
+# No SMTP credentials are committed to this repo, so by default a message is
+# APPENDED TO DISK (contact_messages.jsonl) with any attachment saved beside
+# it, and the sender gets a success response. If SMTP env vars are provided
+# the same message is also emailed to CONTACT_EMAIL:
+#     DFG_SMTP_HOST, DFG_SMTP_PORT, DFG_SMTP_USER, DFG_SMTP_PASS
+# (For Gmail, DFG_SMTP_PASS must be an App Password, not the account
+# password.) Delivery failure never loses the message - it's on disk first.
+# ─────────────────────────────────────────────
+CONTACT_EMAIL = "python3scapy@gmail.com"
+CONTACT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "contact")
+CONTACT_LOG = os.path.join(CONTACT_DIR, "contact_messages.jsonl")
+CONTACT_MAX_BYTES = 5 * 1024 * 1024
+CONTACT_ALLOWED_EXT = {"pdf", "doc", "docx", "txt", "jpg", "jpeg", "png"}
+
+
+def _send_contact_email(record, attachment_path=None):
+    host = os.environ.get("DFG_SMTP_HOST")
+    if not host:
+        return False, "smtp_not_configured"
+    try:
+        import smtplib
+        from email.message import EmailMessage
+
+        msg = EmailMessage()
+        msg["Subject"] = "[DeepfakeGuard] {} - {}".format(
+            record.get("topic", "general"),
+            record.get("subject") or "(no subject)")
+        msg["From"] = os.environ.get("DFG_SMTP_USER", CONTACT_EMAIL)
+        msg["To"] = CONTACT_EMAIL
+        msg["Reply-To"] = record["email"]
+        msg.set_content(
+            "From: {name} <{email}>\nCompany: {company}\nTopic: {topic}\n"
+            "Received: {received_at}\n\n{message}\n".format(**record))
+
+        if attachment_path and os.path.exists(attachment_path):
+            with open(attachment_path, "rb") as f:
+                msg.add_attachment(f.read(), maintype="application",
+                                   subtype="octet-stream",
+                                   filename=os.path.basename(attachment_path))
+
+        with smtplib.SMTP(host, int(os.environ.get("DFG_SMTP_PORT", 587))) as smtp:
+            smtp.starttls()
+            smtp.login(os.environ["DFG_SMTP_USER"], os.environ["DFG_SMTP_PASS"])
+            smtp.send_message(msg)
+        return True, "sent"
+    except Exception as e:
+        print("[CONTACT] SMTP send failed: {}".format(e))
+        return False, str(e)
+
+
+@app.route('/api/contact', methods=['POST'])
+def contact_submit():
+    name = (request.form.get("name") or "").strip()
+    email = (request.form.get("email") or "").strip()
+    message = (request.form.get("message") or "").strip()
+
+    if not name or not email or not message:
+        return jsonify({"error": "name, email and message are required"}), 400
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return jsonify({"error": "invalid email address"}), 400
+    if len(message) > 20000:
+        return jsonify({"error": "message is too long"}), 400
+
+    os.makedirs(CONTACT_DIR, exist_ok=True)
+
+    attachment_path = None
+    f = request.files.get("attachment")
+    if f and f.filename:
+        ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+        if ext not in CONTACT_ALLOWED_EXT:
+            return jsonify({"error": "unsupported attachment type .{}".format(ext)}), 400
+        safe = secure_filename(f.filename)
+        stamped = "{}_{}".format(int(time.time()), safe)
+        attachment_path = os.path.join(CONTACT_DIR, stamped)
+        f.save(attachment_path)
+        if os.path.getsize(attachment_path) > CONTACT_MAX_BYTES:
+            os.remove(attachment_path)
+            return jsonify({"error": "attachment exceeds 5MB"}), 400
+
+    record = {
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "name": name,
+        "email": email,
+        "company": (request.form.get("company") or "").strip(),
+        "topic": (request.form.get("topic") or "general").strip(),
+        "subject": (request.form.get("subject") or "").strip(),
+        "message": message,
+        "attachment": os.path.basename(attachment_path) if attachment_path else None,
+    }
+
+    with open(CONTACT_LOG, "a", encoding="utf-8") as log:
+        log.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    emailed, detail = _send_contact_email(record, attachment_path)
+    print("[CONTACT] {} <{}> - {} (email: {})".format(
+        name, email, record["subject"] or "(no subject)", detail))
+
+    return jsonify({"ok": True, "emailed": emailed})
 
 
 @app.route('/participant')

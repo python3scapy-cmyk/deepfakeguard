@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About &middot; DeepfakeGuard</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e1a; --panel:#111729; --line:#1e2740; --line-soft:#18203a;
+    --ink:#e8ecf6; --ink-dim:#aab4cc; --ink-mute:#6b7794;
+    --indigo:#6c7dff; --mint:#34d399; --amber:#fbbf24; --rose:#f87171;
+    --sans:'Archivo',system-ui,sans-serif; --mono:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    min-height:100vh;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    background-image:
+      linear-gradient(rgba(30,39,64,.32) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(30,39,64,.32) 1px,transparent 1px);
+    background-size:44px 44px;
+  }
+  .nav{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:20px 28px;border-bottom:1px solid var(--line);
+    background:rgba(10,14,26,.85);backdrop-filter:blur(6px);
+    position:sticky;top:0;z-index:10;
+  }
+  .brand{
+    display:flex;align-items:center;gap:9px;text-decoration:none;
+    font-family:var(--mono);font-size:11px;font-weight:700;
+    letter-spacing:2.2px;text-transform:uppercase;color:var(--ink-dim);
+  }
+  .brand i{width:9px;height:9px;background:var(--indigo);border-radius:2px;display:block;}
+  .links{display:flex;gap:6px;}
+  .links a{
+    padding:7px 13px;border-radius:8px;text-decoration:none;
+    font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:1.3px;
+    text-transform:uppercase;color:var(--ink-mute);transition:.15s;
+  }
+  .links a:hover{color:var(--ink);background:var(--panel);}
+  .links a.on{color:var(--ink);background:var(--panel);border:1px solid var(--line);}
+  .links a.cta{color:var(--indigo);border:1px solid var(--indigo);}
+  .wrap{max-width:880px;margin:0 auto;padding:52px 24px 80px;}
+  .eyebrow{
+    font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:2px;
+    text-transform:uppercase;color:var(--indigo);margin-bottom:14px;
+  }
+  h1{font-size:34px;line-height:1.2;letter-spacing:-.6px;margin-bottom:14px;}
+  .lede{color:var(--ink-dim);font-size:16px;line-height:1.7;margin-bottom:14px;}
+  h2{font-size:20px;letter-spacing:-.2px;margin:42px 0 14px;}
+  p{color:var(--ink-mute);font-size:14.5px;line-height:1.75;margin-bottom:12px;}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:13px;
+    padding:20px 20px 18px;
+  }
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px;}
+  @media(max-width:720px){.grid{grid-template-columns:1fr;}}
+  .card h3{
+    font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:1.5px;
+    text-transform:uppercase;color:var(--ink-dim);margin-bottom:9px;
+  }
+  .card p{font-size:13.5px;margin:0;}
+  .sig{
+    display:flex;gap:13px;padding:14px 0;border-bottom:1px solid var(--line-soft);
+  }
+  .sig:last-child{border-bottom:none;}
+  .sig b{
+    flex:0 0 132px;font-family:var(--mono);font-size:10.5px;font-weight:700;
+    letter-spacing:1.1px;text-transform:uppercase;color:var(--ink);padding-top:2px;
+  }
+  .sig span{color:var(--ink-mute);font-size:13.5px;line-height:1.65;}
+  .callout{
+    border-left:2px solid var(--amber);background:var(--panel);
+    padding:16px 18px;border-radius:0 10px 10px 0;margin:22px 0;
+  }
+  .callout p{color:var(--ink-dim);margin:0;font-size:14px;}
+  .foot{
+    border-top:1px solid var(--line);margin-top:56px;padding-top:22px;
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;
+    font-family:var(--mono);font-size:10px;letter-spacing:1.2px;
+    text-transform:uppercase;color:var(--ink-mute);
+  }
+  .foot a{color:var(--indigo);text-decoration:none;}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <a class="brand" href="/"><i></i> DeepfakeGuard</a>
+  <div class="links">
+    <a href="/">Home</a>
+    <a href="/about" class="on">About</a>
+    <a href="/contact">Contact</a>
+    <a href="/participant" class="cta">Verify me</a>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="eyebrow">What we do</div>
+  <h1>Verifying that the person on the call is a person &mdash; and the right one</h1>
+  <p class="lede">
+    DeepfakeGuard is a real-time, multi-modal verification system. It checks a live
+    video call for synthetic faces, replayed or injected video, cloned voices, and
+    identity swaps mid-session &mdash; and turns those checks into one trust score a
+    human can act on.
+  </p>
+
+  <div class="callout">
+    <p>
+      In 2024 an employee at the engineering firm Arup transferred roughly $25M after a
+      video call in which every other participant was a deepfake. The call looked normal.
+      That is the gap this system is built for: the moment a face on a screen stops being
+      evidence of a person.
+    </p>
+  </div>
+
+  <h2>How the verification works</h2>
+  <p>
+    A verifier opens a session and shares a six-character code. The person being verified
+    joins with that code in a browser &mdash; no install, no app. Their camera and microphone
+    stream is analysed continuously, and five independent signals are fused into a single
+    trust score, with hard-deny rules that override the score when a check fails outright.
+  </p>
+
+  <div class="card" style="margin-top:12px;">
+    <div class="sig"><b>Visual deepfake</b><span>
+      A transformer image classifier scores each sampled face crop for generative
+      artefacts, smoothed over a rolling window so one noisy frame can't swing a verdict.
+    </span></div>
+    <div class="sig"><b>Liveness</b><span>
+      Randomised challenges the user must perform on cue &mdash; blink twice, turn your head
+      left or right &mdash; measured from a 468-point face mesh. A photo, a looping clip and a
+      pre-rendered deepfake all fail this, because none of them can respond to a prompt
+      issued a second ago.
+    </span></div>
+    <div class="sig"><b>Voice</b><span>
+      A spoken-phrase challenge: the system picks a random phrase, the user says it, and the
+      same clip is checked twice &mdash; speech recognition confirms the phrase was actually
+      spoken, and an anti-spoofing model trained on ASVspoof 2019 checks the voice is not
+      synthetic or replayed.
+    </span></div>
+    <div class="sig"><b>Identity continuity</b><span>
+      A face embedding taken at the start of the session is re-checked throughout it, so
+      swapping the person &mdash; or substituting a video &mdash; part-way through is caught.
+    </span></div>
+    <div class="sig"><b>Injection &amp; replay</b><span>
+      Virtual-camera and frame-timing checks for streams fed in from software rather than a
+      real capture device.
+    </span></div>
+  </div>
+
+  <h2>What we offer</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Live session verification</h3>
+      <p>
+        Browser-based, no install for the person being verified. Multiple clients can join
+        one verifier's session; each gets an independent trust score, challenge history and
+        audit trail.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Media forensics on upload</h3>
+      <p>
+        Drop in a photo, video or audio file and get the same pipeline applied offline &mdash;
+        deepfake probability, spoof-frame ratio, identity drift across frames, and audio
+        spoof scoring.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Verifier console</h3>
+      <p>
+        A PIN-gated dashboard: live trust score with its band, per-signal breakdown, the
+        reason a score moved, and a timestamped log of every challenge and verdict.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Explainable verdicts</h3>
+      <p>
+        Every score comes with the signal that dragged it down and the rule that fired.
+        A verifier is never asked to trust a number they can't interrogate.
+      </p>
+    </div>
+  </div>
+
+  <h2>Design principles</h2>
+  <p>
+    <b style="color:var(--ink-dim);">No silent degradation.</b> If a model fails to load, the
+    system says so and abstains rather than emitting a confident-looking number from a mock.
+  </p>
+  <p>
+    <b style="color:var(--ink-dim);">Absent is not neutral.</b> A signal that never arrived is
+    excluded from the fusion rather than scored as "average", so a missing check can't quietly
+    manufacture a passing grade.
+  </p>
+  <p>
+    <b style="color:var(--ink-dim);">Privacy by default.</b> Frames are analysed in memory and
+    discarded. Consent is collected before the camera opens, and what is collected, why, and how
+    long it is kept is stated in plain language on the consent screen.
+  </p>
+
+  <div class="foot">
+    <span>DeepfakeGuard &middot; Multi-modal identity verification</span>
+    <span><a href="mailto:python3scapy@gmail.com">python3scapy@gmail.com</a></span>
+  </div>
+</div>
+
+</body>
+</html>

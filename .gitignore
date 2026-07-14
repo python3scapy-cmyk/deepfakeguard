@@ -16,3 +16,4 @@ backend/admin_pin.json
 
 # Uploaded/temp media
 /tmp_uploads/
+backend/contact/
