@@ -986,7 +986,8 @@ let ADMIN_PIN = '';
     // camera; it joins the same signaling room as participant.html and
     // displays whatever stream arrives on ontrack. This device is
     // receive-only: it never calls getUserMedia() and never sends media.
-    const RTC_ROOM = ROOM_CODE || "demo-room";
+    function rtcRoom() { return ROOM_CODE || "demo-room"; }
+    let rtcJoinedRoom = null;
     var rtcSocket, rtcPc;
     var RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
@@ -1019,7 +1020,7 @@ let ADMIN_PIN = '';
 
         rtcPc.onicecandidate = function(event){
             if (event.candidate) {
-                rtcSocket.emit('ice-candidate', { room: RTC_ROOM, candidate: event.candidate });
+                rtcSocket.emit('ice-candidate', { room: rtcRoom(), candidate: event.candidate });
             }
         };
 
@@ -1034,20 +1035,20 @@ let ADMIN_PIN = '';
             if (label) label.textContent = 'Participant joined — negotiating...';
             var offer = await rtcPc.createOffer();
             await rtcPc.setLocalDescription(offer);
-            rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
+            rtcSocket.emit('offer', { room: rtcRoom(), sdp: offer });
         });
 
         rtcSocket.on('peer-already-present', async function(){
             var offer = await rtcPc.createOffer();
             await rtcPc.setLocalDescription(offer);
-            rtcSocket.emit('offer', { room: RTC_ROOM, sdp: offer });
+            rtcSocket.emit('offer', { room: rtcRoom(), sdp: offer });
         });
 
         rtcSocket.on('offer', async function(data){
             await rtcPc.setRemoteDescription(data.sdp);
             var answer = await rtcPc.createAnswer();
             await rtcPc.setLocalDescription(answer);
-            rtcSocket.emit('answer', { room: RTC_ROOM, sdp: answer });
+            rtcSocket.emit('answer', { room: rtcRoom(), sdp: answer });
         });
 
         rtcSocket.on('answer', async function(data){
@@ -1062,7 +1063,8 @@ let ADMIN_PIN = '';
             }
         });
 
-        rtcSocket.emit('join', { room: RTC_ROOM, role: 'verifier' });
+        rtcJoinedRoom = rtcRoom();
+        rtcSocket.emit('join', { room: rtcJoinedRoom, role: 'verifier' });
         if (label) label.textContent = 'Waiting for participant to join...';
     }
 
@@ -1636,6 +1638,9 @@ function renderRoster(data) {
         codeEl.textContent = code;
         history.replaceState({}, '', '/admin?code=' + code);
         fetchLiveScores();
+        // Join the WebRTC signalling room for THIS code so the participant's
+        // video actually reaches this dashboard.
+        if (window.maybeJoinVerifier) window.maybeJoinVerifier();
     }
 
     async function createSession() {
@@ -1740,10 +1745,25 @@ function renderRoster(data) {
         });
     });
 })();
+// The verifier joins the signalling room only when BOTH are true:
+//   1. consent has been given, and
+//   2. a session code exists.
+// Joining on page load (the old behaviour) meant ROOM_CODE was still empty,
+// so the dashboard sat in "demo-room" while the participant joined the real
+// code's room - both sides waited for a peer that was never coming, even
+// though the analysis data channel worked fine.
+window.verifierConsented = false;
+window.maybeJoinVerifier = function () {
+    if (window.verifierConsented && ROOM_CODE && rtcJoinedRoom !== ROOM_CODE) {
+        joinAsVerifier();
+    }
+};
+
 async function bootVerifier(){
     await window.requestConsent();
     window.onConsentRetry = bootVerifier;
-    joinAsVerifier();
+    window.verifierConsented = true;
+    window.maybeJoinVerifier();
 }
 bootVerifier();
 
