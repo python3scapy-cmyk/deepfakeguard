@@ -1169,6 +1169,8 @@
         code: ROOM,
         ear: (typeof window.__DFG_EAR === 'number') ? window.__DFG_EAR : null,
         yaw_ratio: (typeof window.__DFG_YAW === 'number') ? window.__DFG_YAW : null,
+        camera_name: window.__DFG_CAMERA_NAME || null,
+        camera_class: window.__DFG_CAMERA_CLASS || null,
         jpg: analysisCanvas.toDataURL('image/jpeg', 0.7)
       });
     }, 1000 / ANALYSIS_FPS);
@@ -1501,6 +1503,12 @@
     if (textEl) { textEl.textContent = info.name; textEl.className = 'vf-camera-text ' + info.cls; }
     if (tagEl) { tagEl.textContent = info.tag; tagEl.className = 'vf-camera-tag ' + (info.cls === 'unknown' ? '' : info.cls); }
     console.log('[DFG] active camera:', info.name, '->', info.cls);
+    // Stash the classification so the analysis_frame stream can forward it
+    // to the backend, which in turn forwards it to the verifier dashboard
+    // (index.html). Without this, the camera name never leaves this
+    // browser — it's display-only, computed from the track label above.
+    window.__DFG_CAMERA_NAME = info.name || null;
+    window.__DFG_CAMERA_CLASS = info.cls || null;
   }
 
   function setStatus(text, live) {
