@@ -7,6 +7,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import time
 import base64
+import json
 import tempfile
 import cv2
 import numpy as np
@@ -21,7 +22,8 @@ app = Flask(__name__)
 # then timed out even though the browser had recorded perfectly good audio.
 # The client now downsamples to 16kHz int16 (~256 KB), and this ceiling
 # keeps a margin.
-socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=10_000_000)
+socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=10_000_000,
+                     async_handlers=False)
 CORS(app)  # allows cross-origin HTTP requests from the dashboard
 
 # ─────────────────────────────────────────────
@@ -69,6 +71,53 @@ HARD_DENY_TIMEOUT_SEC = 3.0  # a hard-deny is only binding while still fresh
 # ─────────────────────────────────────────────
 session_log = []
 MAX_LOG_ENTRIES = 500
+
+# ─────────────────────────────────────────────
+# Faza 6: ACCESS DENIED audit trail. Separate from session_log above --
+# this one exists specifically so denied attempts (fake camera, spoof,
+# identity mismatch, etc.) are never lost among routine trust-score
+# updates, and so the operator can see WHO tried (IP, camera, reasons).
+# Kept in memory (for the /denied-log endpoint) AND appended to a
+# JSON-lines file on disk so it survives a server restart.
+# ─────────────────────────────────────────────
+denied_log = []
+MAX_DENIED_LOG_ENTRIES = 1000
+DENIED_LOG_PATH = os.path.join(os.path.dirname(__file__), "denied_attempts.jsonl")
+
+# request.sid (Socket.IO connection id) -> {"ip":..., "room":...},
+# captured once at 'join' so on_analysis_frame can attach it to any
+# denied-attempt log entry without re-deriving it from the request.
+_participant_meta = {}
+
+# session_id (the per-call AnalysisEngine id, e.g. "web_ab12cd34") ->
+# last verdict seen, so a sustained ACCESS DENIED only gets logged ONCE
+# when it *starts*, not every ~0.5s (EMIT_EVERY) for as long as it lasts.
+_last_verdict_by_session = {}
+
+
+def log_denied_attempt(session_id, fusion, meta):
+    """Append one ACCESS DENIED event to the audit trail (memory + disk)."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "room": (meta or {}).get("room"),
+        "ip": (meta or {}).get("ip"),
+        "camera_label": (meta or {}).get("camera_label"),
+        "trust_score": fusion.get("trust_score"),
+        "trust_band": fusion.get("trust_band"),
+        "hard_deny_reasons": fusion.get("hard_deny_reasons"),
+        "signals": fusion.get("signals"),
+    }
+    denied_log.append(entry)
+    if len(denied_log) > MAX_DENIED_LOG_ENTRIES:
+        denied_log.pop(0)
+    print(f"[DENIED] session={session_id} ip={entry['ip']} "
+          f"reasons={entry['hard_deny_reasons']} camera={entry['camera_label']}")
+    try:
+        with open(DENIED_LOG_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        print(f"[DENIED] failed to write audit file: {e}")
 _last_trust_band = None
 
 # EMA state for trust-score smoothing
@@ -1010,6 +1059,24 @@ def get_session_log():
     return jsonify({"log": session_log, "count": len(session_log)})
 
 
+@app.route('/denied-log', methods=['GET'])
+def get_denied_log():
+    """Faza 6: audit trail of ACCESS DENIED attempts -- who (ip),
+    what camera, what trust score/band, and why (hard_deny_reasons).
+    Also persisted to backend/denied_attempts.jsonl so it survives a
+    server restart, in case you need it for longer than this process's
+    in-memory list."""
+    return jsonify({"log": denied_log, "count": len(denied_log)})
+
+
+@app.route('/denied-log/reset', methods=['POST'])
+def reset_denied_log():
+    """Clears the in-memory list only -- denied_attempts.jsonl on disk is
+    left untouched, since that's the durable audit copy."""
+    denied_log.clear()
+    return jsonify({"reset": True})
+
+
 @app.route('/session-reset', methods=['POST'])
 def reset_session():
     """
@@ -1053,6 +1120,19 @@ def on_join(data):
     state = _rooms.setdefault(room, {'verifier': None, 'participant': None})
     state[role] = request.sid
 
+    if role == 'participant':
+        # Faza 5: tell the participant their own observed IP so the UI can
+        # show it alongside the camera name. request.remote_addr is the
+        # address Flask/Socket.IO see the socket connection from -- behind
+        # a reverse proxy this may be the proxy's IP, not the client's
+        # real one, unless the proxy forwards X-Forwarded-For and
+        # ProxyFix / a trusted-proxy config is set up for it.
+        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        if client_ip and ',' in client_ip:
+            client_ip = client_ip.split(',')[0].strip()
+        emit('client_info', {'ip': client_ip})
+        _participant_meta[request.sid] = {'ip': client_ip, 'room': room}
+
     emit('peer-joined', {'role': role}, room=room, include_self=False)
 
     # Fire only once both roles are present -- safe to check on EVERY
@@ -1067,6 +1147,7 @@ def on_disconnect():
         for role in ('verifier', 'participant'):
             if state.get(role) == request.sid:
                 state[role] = None
+    _participant_meta.pop(request.sid, None)
 
 @socketio.on('offer')
 def on_offer(data):
@@ -1109,12 +1190,26 @@ def on_analysis_frame(data):
 
     ear = data.get('ear')
     yaw_ratio = data.get('yaw_ratio')
+    camera_label = data.get('camera_label')
     fusion = eng.process_frame(
         frame,
         ear=ear if isinstance(ear, (int, float)) else None,
-        yaw_ratio=yaw_ratio if isinstance(yaw_ratio, (int, float)) else None)
+        yaw_ratio=yaw_ratio if isinstance(yaw_ratio, (int, float)) else None,
+        camera_label=camera_label if isinstance(camera_label, str) else None)
     if fusion:
         ingest_fusion(fusion)  # dashboard sees it via the same /scores path
+
+        # Faza 6: audit trail for denied attempts. Only fires on the
+        # transition INTO "ACCESS DENIED" (not every ~0.5s it stays that
+        # way), so a 10-second-long spoof attempt is one log line, not 20.
+        verdict = fusion.get('verdict')
+        prev_verdict = _last_verdict_by_session.get(sid)
+        if verdict == 'ACCESS DENIED' and prev_verdict != 'ACCESS DENIED':
+            meta = dict(_participant_meta.get(request.sid, {}))
+            meta['camera_label'] = camera_label if isinstance(camera_label, str) else None
+            log_denied_attempt(sid, fusion, meta)
+        _last_verdict_by_session[sid] = verdict
+
         emit('verdict_update', {
             'session_id': sid,
             'trust_score': fusion['trust_score'],
@@ -1181,10 +1276,16 @@ def on_audio_clip(data):
 # Faza 1: serve the frontend from Flask so participant/dashboard run on
 # the same origin as the API (no file://, no CORS surprises, and
 # localhost counts as a secure context for getUserMedia).
+#   http://localhost:5000/            → choose.html (role picker)
 #   http://localhost:5000/participant  → participant.html
 #   http://localhost:5000/dashboard    → index.html
 # ─────────────────────────────────────────────
 FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+
+
+@app.route('/')
+def choose_role_page():
+    return send_from_directory(FRONTEND_DIR, 'choose.html')
 
 
 @app.route('/participant')
@@ -1196,6 +1297,9 @@ def participant_page():
 def dashboard_page():
     return send_from_directory(FRONTEND_DIR, 'index.html')
 
+@app.route('/access-granted')
+def access_granted_page():
+    return send_from_directory(FRONTEND_DIR, 'access-granted.html')
 
 @app.route('/frontend/<path:fname>')
 def frontend_static(fname):
