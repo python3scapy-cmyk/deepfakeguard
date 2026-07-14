@@ -34,3 +34,5 @@ faster-whisper
 xgboost
 kagglehub
 scikit-learn
+# Test suite (tests/test_fusion_parity.py)
+pytest
