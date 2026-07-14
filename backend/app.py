@@ -104,6 +104,11 @@ class ClientState:
         # Rolling summary for the admin's client list
         self.summary = {"trust_score": None, "band": None, "verdict": None,
                         "session_final": False}
+        # Camera identity, as classified client-side in participant.html
+        # (browser is the only place that can read the MediaStreamTrack
+        # label). Display-only — never affects the trust score.
+        self.camera_name = None
+        self.camera_class = None
 
     def touch(self):
         self.last_active = time.time()
@@ -1135,6 +1140,10 @@ def get_scores():
             "injection_risk": score_to_tier(flat_scores["injection_risk_score"])  if flat_scores.get("injection_risk_score")  is not None else None
         },
         "signal_missing": signal_missing,
+        "camera": {
+            "name":  state.camera_name,
+            "class": state.camera_class,   # "physical" | "suspect" | "virtual" | None
+        },
         "modules_reporting": [k for k, v in state.latest_scores.items() if v is not None],
         "session_log": state.session_log[-30:],
         # Admin view: who else is verifying in this room right now.
@@ -1281,6 +1290,15 @@ def on_analysis_frame(data):
         yaw_ratio=yaw_ratio if isinstance(yaw_ratio, (int, float)) else None)
     if fusion:
         state = room.client(sid)          # per-client state, not a global one
+        # Camera label is display-only and sent on every frame, but only
+        # bother updating state (and logging) when it actually changes —
+        # avoids a log line 10x/sec.
+        cam_name = data.get('camera_name')
+        cam_class = data.get('camera_class')
+        if cam_name and cam_name != state.camera_name:
+            state.camera_name = cam_name
+            state.camera_class = cam_class
+            print(f"[ROOM {room.code}] {sid} camera: {cam_name} ({cam_class})")
         ingest_fusion(fusion, state)
         state.summary = {
             "trust_score": fusion.get("trust_score"),
