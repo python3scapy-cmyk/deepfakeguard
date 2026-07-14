@@ -25,6 +25,11 @@ flask
 flask-socketio
 flask-cors
 
+# Spoken-phrase liveness challenge (audio_module/speech_challenge.py).
+# WITHOUT this the voice challenge silently degrades to energy-only mode:
+# it can tell that someone spoke, but NOT whether they said the phrase.
+faster-whisper
+
 # Audio spoof training script (audio_module/train_xgb.py)
 xgboost
 kagglehub

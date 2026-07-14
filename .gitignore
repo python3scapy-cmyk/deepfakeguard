@@ -1,8 +1,18 @@
 venv/
+.venv/
 .cache/
 __pycache__/
 *.pyc
+*.pycls
+
+# Model/feature caches and generated artifacts
 audio_module/feats_*.npz
+
+# Evaluation data (regenerate with security/evaluation_runner.py)
 security/eval_sessions.jsonl
+
+# Admin PIN is per-deployment, never commit it
 backend/admin_pin.json
-audio_module/train_xgb.pycls
+
+# Uploaded/temp media
+/tmp_uploads/

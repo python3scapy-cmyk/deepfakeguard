@@ -406,12 +406,22 @@ CONFLICT_PENALTIES = {
 IDENTITY_TRUST_THRESHOLD = 0.60
 
 
-def compute_trust(state, scores, sub_scores, conflicts=None):
+def compute_trust(state, scores=None, sub_scores=None, conflicts=None):
+    """Weighted fusion + hard-deny + conflict penalty + EMA.
+
+    `state` carries the per-client history (EMA, hard-deny timers). It is
+    OPTIONAL so the pure-function parity test in tests/test_fusion_parity.py
+    can still call compute_trust(scores, sub_scores, conflicts) with no
+    session context: when the first argument is a dict, it is treated as
+    `scores` and a throwaway ClientState supplies the history slots.
     """
-    Order of operations (must match security/fusion_engine.py exactly):
-        weighted sum -> conflict penalty -> identity cap -> hard-deny
-        override -> band
-    """
+    if isinstance(state, dict):            # called without a state -> shift args
+        state, scores, sub_scores, conflicts = (
+            ClientState("_stateless"), state, scores, sub_scores)
+
+    # Order of operations (must match security/fusion_engine.py exactly):
+    #   weighted sum -> conflict penalty -> identity cap -> hard-deny
+    #   override -> band
     weights = {
         "identity_score":        0.25,
         "liveness_score":        0.25,

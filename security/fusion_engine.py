@@ -1,4 +1,21 @@
 """
+!! NOT THE LIVE FUSION PATH !!
+
+The engine that actually runs in production is:
+  - engine.py            (browser sessions, via backend/app.py)
+  - main.py              (local camera loop)
+  - backend/app.py       compute_trust()  (dashboard scoring)
+
+This module is the REFERENCE implementation kept for
+tests/test_fusion_parity.py, which proves backend/app.py agrees with it
+across a 32k-point grid. Do NOT wire it into a live path.
+
+NOTE on key names: this module uses "visual"/"audio", while the live path
+uses "visual_deepfake"/"audio_spoof". That mapping is deliberate and is
+handled by BACKEND_KEYS in the parity test. Feeding live-path key names
+straight into this module would silently drop those two signals.
+"""
+"""
 DeepfakeGuard - Member 3 (M3) Trust Score Fusion Engine
 Week 3 - "All Five Signals, One Score"
 
