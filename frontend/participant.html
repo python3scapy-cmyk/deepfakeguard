@@ -547,6 +547,8 @@
     <span class="vf-voice-state" id="vfVoiceState">&mdash;</span>
   </div>
   <div class="vf-reason" id="vfReason" hidden></div>
+  <div class="vf-reason" id="vfCamera" hidden></div>
+  <div class="vf-reason" id="vfIp" hidden></div>
   <div class="vf-final" id="vfFinal" hidden>
     <span class="vf-final-text" id="vfFinalText">Verification complete</span>
     <button class="vf-retry" id="vfRetry" type="button">Try again</button>
@@ -1022,7 +1024,8 @@
      WebRTC — unchanged. Sender-only contract preserved exactly.
      ═══════════════════════════════════════════════════════════ -->
 <script>
-  const ROOM = "demo-room";
+  const _roomParam = new URLSearchParams(location.search).get('room');
+  const ROOM = _roomParam ? _roomParam.trim().toUpperCase() : "demo-room";
   // Same-origin socket: works on localhost:5000 AND through the HTTPS
   // cloudflared tunnel (the old hostname:5000 fallback broke tunneling).
   const socket = io();
@@ -1097,6 +1100,7 @@
         session_id: SESSION_ID,
         ear: (typeof window.__DFG_EAR === 'number') ? window.__DFG_EAR : null,
         yaw_ratio: (typeof window.__DFG_YAW === 'number') ? window.__DFG_YAW : null,
+        camera_label: window.__DFG_CAMERA_LABEL || null,
         jpg: analysisCanvas.toDataURL('image/jpeg', 0.7)
       });
     }, 1000 / ANALYSIS_FPS);
@@ -1401,6 +1405,14 @@
     try {
       localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       document.getElementById('localPreview').srcObject = localStream;
+      // Faza 5: capture the browser-reported device label so the backend
+      // can run it through security/device_check.py's known-virtual-camera
+      // list. Only available once getUserMedia permission is granted.
+      const camTrack = localStream.getVideoTracks()[0];
+      window.__DFG_CAMERA_LABEL = camTrack ? camTrack.label : null;
+      const vfCamera = document.getElementById('vfCamera');
+      vfCamera.textContent = 'Camera: ' + (window.__DFG_CAMERA_LABEL || 'unknown / no label');
+      vfCamera.hidden = false;
       startAnalysisStream();   // Faza 1: begin feeding the analysis engine
     } catch (err) {
       console.error('getUserMedia failed:', err);
@@ -1432,6 +1444,12 @@
     socket.emit('join', { room: ROOM, role: 'participant' });
     setStatus('Waiting for verifier to join', false);
   }
+
+  socket.on('client_info', (d) => {
+    const vfIp = document.getElementById('vfIp');
+    vfIp.textContent = 'IP: ' + (d.ip || 'unknown');
+    vfIp.hidden = false;
+  });
 
   socket.on('peer-joined', () => {
     // participant.html never initiates the offer — it waits for the
