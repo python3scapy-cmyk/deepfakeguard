@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepfakeGuard</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e1a; --panel:#111729; --line:#1e2740; --line-soft:#18203a;
+    --ink:#e8ecf6; --ink-dim:#aab4cc; --ink-mute:#6b7794;
+    --indigo:#6c7dff; --mint:#34d399; --amber:#fbbf24;
+    --sans:'Archivo',system-ui,sans-serif; --mono:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    min-height:100vh;background:var(--bg);color:var(--ink);
+    font-family:var(--sans);display:flex;align-items:center;
+    justify-content:center;padding:24px;
+    background-image:
+      linear-gradient(rgba(30,39,64,.35) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(30,39,64,.35) 1px,transparent 1px);
+    background-size:44px 44px;
+  }
+  .wrap{width:100%;max-width:760px;}
+  .brand{
+    display:flex;align-items:center;gap:9px;margin-bottom:34px;
+    font-family:var(--mono);font-size:11px;font-weight:700;
+    letter-spacing:2.4px;text-transform:uppercase;color:var(--ink-dim);
+  }
+  .brand i{width:9px;height:9px;background:var(--indigo);border-radius:2px;display:block;}
+  h1{font-size:32px;line-height:1.18;letter-spacing:-.5px;margin-bottom:10px;}
+  .sub{color:var(--ink-mute);font-size:15px;line-height:1.6;max-width:520px;margin-bottom:34px;}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:640px){.cards{grid-template-columns:1fr;}}
+  .card{
+    display:block;text-decoration:none;color:inherit;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:24px 22px 22px;transition:border-color .18s,transform .18s;
+  }
+  .card:hover{border-color:var(--indigo);transform:translateY(-2px);}
+  .tag{
+    font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:1.6px;
+    text-transform:uppercase;color:var(--ink-mute);margin-bottom:14px;
+  }
+  .card h2{font-size:19px;margin-bottom:7px;letter-spacing:-.2px;}
+  .card p{color:var(--ink-mute);font-size:13.5px;line-height:1.65;margin-bottom:18px;}
+  .go{
+    display:inline-flex;align-items:center;gap:7px;
+    font-family:var(--mono);font-size:10.5px;font-weight:700;
+    letter-spacing:1.3px;text-transform:uppercase;color:var(--indigo);
+  }
+  .card.admin .tag{color:var(--amber);}
+  .card.admin:hover{border-color:var(--amber);}
+  .card.admin .go{color:var(--amber);}
+  .card.client .tag{color:var(--mint);}
+  .card.client:hover{border-color:var(--mint);}
+  .card.client .go{color:var(--mint);}
+  .foot{
+    margin-top:30px;font-family:var(--mono);font-size:9.5px;letter-spacing:1.2px;
+    text-transform:uppercase;color:var(--ink-mute);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><i></i> DeepfakeGuard</div>
+
+  <h1>Real-time identity verification<br>against synthetic media</h1>
+  <p class="sub">
+    A verifier opens a session and shares its code. The person being verified
+    joins with that code, and their face, liveness and voice are checked live
+    against deepfake, replay and injection attacks.
+  </p>
+
+  <div class="cards">
+    <a class="card admin" href="/admin">
+      <div class="tag">For the verifier</div>
+      <h2>Admin panel</h2>
+      <p>
+        Open a verification session, get a share code, and watch every client's
+        trust score, liveness challenges and audit trail as it happens.
+      </p>
+      <span class="go">Open panel &rarr;</span>
+    </a>
+
+    <a class="card client" href="/participant">
+      <div class="tag">For the person verifying</div>
+      <h2>Verify me</h2>
+      <p>
+        Enter the code you were given, allow your camera and microphone, and
+        complete the liveness and voice challenges.
+      </p>
+      <span class="go">Enter code &rarr;</span>
+    </a>
+  </div>
+
+  <div class="foot">Multi-modal fusion &middot; Face &middot; Liveness &middot; Voice &middot; Injection</div>
+</div>
+</body>
+</html>
