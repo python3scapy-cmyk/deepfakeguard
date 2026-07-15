@@ -1484,12 +1484,33 @@ def on_audio_clip(data):
         pcm = np.interp(np.linspace(0, len(pcm) - 1, target_len),
                         np.arange(len(pcm)), pcm).astype(np.float32)
     room = get_room((data or {}).get('code'))
-    if room is not None:
-        room.client(sid)                  # refresh liveness of this client
+    state = room.client(sid) if room is not None else None
     eng = get_engine(sid, remote=True)
     if eng is None:
         return
     eng.process_audio_clip(pcm)
+
+    # Mirror the engine's audio-spoof result into latest_scores so /scores
+    # (and therefore the dashboard) actually sees it. Previously the result
+    # stayed inside the engine object and was never surfaced here -- the
+    # audio panel showed "not yet connected" forever even though AASIST
+    # was scoring every clip correctly.
+    if state is not None and eng._last_audio_result is not None:
+        spoof_prob = eng._last_audio_result.get("spoof_probability")
+        if spoof_prob is not None:
+            audio_score = round((1.0 - float(spoof_prob)) * 100)
+            audio_verdict = "FAKE" if spoof_prob > 0.5 else "REAL"
+            state.latest_scores["audio"] = {
+                "module": "audio",
+                "session_id": sid,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "voice_detected": True,
+                "audio_deepfake_score": max(0, min(100, audio_score)),
+                "verdict": audio_verdict
+            }
+            state.last_seen["audio"] = time.time()
+            if audio_verdict == "FAKE":
+                log_event(state, "audio_alert", "Audio deepfake signal flagged")
 
 
 # ─────────────────────────────────────────────
