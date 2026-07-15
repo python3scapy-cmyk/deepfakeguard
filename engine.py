@@ -921,7 +921,7 @@ def analyze_audio_file(path, max_seconds=8):
     y = y.astype(np.float32)
     try:
         with _infer_lock:
-            audio_result = shared["audio"].ensemble_score(y)
+            audio_result = shared["audio"].score_pcm_no_state(y, chunk_seconds=1.0)
     except Exception as e:
         return {"error": f"audio scoring failed: {e}"}
 
