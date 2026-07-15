@@ -17,3 +17,8 @@ backend/admin_pin.json
 # Uploaded/temp media
 /tmp_uploads/
 backend/contact/
+
+# Enrolled biometric templates are PERSONAL DATA - never commit them.
+# (security/enrolled_face.json contained a real ArcFace embedding and was
+# publicly visible until removed. Regenerate locally with security/enroll.py.)
+security/enrolled_face.json

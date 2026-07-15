@@ -17,6 +17,7 @@ from werkzeug.utils import secure_filename
 from flask import send_from_directory
 from vision.deepfake_detector import DeepfakeDetector
 from engine import get_engine, drop_session
+from security.device_check import classify_camera_label
 app = Flask(__name__)
 # max_http_buffer_size: engine.io defaults to 1 MB. A 6s voice clip sent as
 # 48kHz float32 base64 was ~1.5 MB, so the websocket was closed with
@@ -78,6 +79,30 @@ def _save_pin(pin):
 
 def admin_pin():
     return _load_pin()
+
+
+def _coded_room_write_blocked(code):
+    """Guard for state-WRITING HTTP endpoints (/score, /session-reset,
+    /analyze-upload). Returns an error string if the request targets a
+    CODED room without the admin PIN, else None.
+
+    Rationale: these endpoints were fully unauthenticated, so any
+    participant who knew their own room code + session_id could POST
+    whitewashing module scores or reset a session mid-verification. The
+    ?demo=1 gate on the dashboard is client-side only and protects
+    nothing. The LOCAL room stays open - main.py's loopback pipeline
+    must keep working with zero changes - and coded rooms now require
+    the admin PIN via the X-Admin-Pin header (or ?pin= for curl).
+    index.html sends the header on every affected call after login."""
+    if not code or str(code).upper() == DEFAULT_CODE:
+        return None                      # LOCAL room: unchanged, open
+    current = admin_pin()
+    supplied = request.headers.get("X-Admin-Pin") or request.args.get("pin") or ""
+    if current is not None and str(supplied) == str(current):
+        return None
+    return "writes to coded rooms require the admin PIN (X-Admin-Pin header)"
+
+
 DEFAULT_CODE = "LOCAL"
 LOCAL_SESSION = "local"
 ROOM_IDLE_SEC = 30 * 60
@@ -104,6 +129,14 @@ class ClientState:
         # Rolling summary for the admin's client list
         self.summary = {"trust_score": None, "band": None, "verdict": None,
                         "session_final": False}
+        # Camera identity of this client. NAME comes from the browser
+        # (only place that can read the MediaStreamTrack label); CLASS is
+        # re-derived SERVER-SIDE via security/device_check.py, so the
+        # client's own opinion of its class is never trusted for the
+        # verdict. 'virtual' -> hard deny, 'suspect' -> penalty (see
+        # on_analysis_frame).
+        self.camera_name = None
+        self.camera_class = None
 
     def touch(self):
         self.last_active = time.time()
@@ -614,8 +647,15 @@ def analyze_upload():
     spoof heuristics + identity continuity + audio spoof via ffmpeg),
     fused with the same weights/bands as the live path. Legacy response
     fields are preserved; a 'full_pipeline' block is added on top."""
-    _room, state = resolve_state(request.args.get("code"),
-                                 request.args.get("session"), create=True)
+    upload_code = request.args.get("code")
+    err = _coded_room_write_blocked(upload_code)
+    if err:
+        return jsonify({"error": err}), 401
+    _room, state = resolve_state(upload_code, request.args.get("session"),
+                                 create=(not upload_code
+                                         or str(upload_code).upper() == DEFAULT_CODE))
+    if state is None:
+        return jsonify({"error": "unknown room code"}), 404
     if "media" not in request.files:
         return jsonify({"error": "no file field 'media' in request"}), 400
     f = request.files["media"]
@@ -682,11 +722,19 @@ def receive_score():
     if not payload:
         return jsonify({"error": "empty or invalid JSON body"}), 400
 
-    # Room/client scoping. Legacy posters (main.py, the simulator buttons)
-    # send no code -> LOCAL room, so nothing about the local pipeline changes.
-    _room, state = resolve_state(
-        payload.get("room_code") or request.args.get("code"),
-        payload.get("session_id"), create=True)
+    # Room/client scoping. Legacy posters (main.py) send no code -> LOCAL
+    # room, so nothing about the local pipeline changes. Coded rooms now
+    # require the admin PIN and must already EXIST - /score no longer
+    # silently creates rooms, which used to bypass the PIN-gated
+    # /api/session/create entirely.
+    code = payload.get("room_code") or request.args.get("code")
+    err = _coded_room_write_blocked(code)
+    if err:
+        return jsonify({"error": err}), 401
+    _room, state = resolve_state(code, payload.get("session_id"),
+                                 create=(not code or str(code).upper() == DEFAULT_CODE))
+    if state is None:
+        return jsonify({"error": "unknown room code", "code": code}), 404
 
     module = payload.get("module")
     if module not in state.latest_scores:
@@ -903,7 +951,7 @@ def ingest_fusion(payload, state):
             "session_id": session_id,
             "timestamp": now_ts,
             "virtual_camera_detected": bool(virtual_camera_detected),
-            "device_name": "reported via main.py fusion",
+            "device_name": signals.get("device_name") or "reported via fusion",
             "injection_risk_score": max(0, min(100, round(injection_risk_score))),
             "frame_timing_anomaly_score": max(0, min(100, round(100 - injection_risk_score))),
             "verdict": "FAKE" if virtual_camera_detected or injection_risk_score < 50 else "REAL"
@@ -1135,6 +1183,10 @@ def get_scores():
             "injection_risk": score_to_tier(flat_scores["injection_risk_score"])  if flat_scores.get("injection_risk_score")  is not None else None
         },
         "signal_missing": signal_missing,
+        "camera": {
+            "name":  state.camera_name,
+            "class": state.camera_class,   # "physical" | "suspect" | "virtual" | "unknown" | None
+        },
         "modules_reporting": [k for k, v in state.latest_scores.items() if v is not None],
         "session_log": state.session_log[-30:],
         # Admin view: who else is verifying in this room right now.
@@ -1174,8 +1226,12 @@ def reset_session():
     "session reset" button so multiple demo scenarios can be run
     back-to-back without restarting the whole backend.
     """
-    _room, state = resolve_state(request.args.get("code"),
-                                 request.args.get("session"), create=True)
+    code = request.args.get("code")
+    err = _coded_room_write_blocked(code)
+    if err:
+        return jsonify({"error": err}), 401
+    _room, state = resolve_state(code, request.args.get("session"),
+                                 create=(not code or str(code).upper() == DEFAULT_CODE))
     if state is None:
         return jsonify({"error": "unknown room code"}), 404
     for key in state.latest_scores:
@@ -1202,6 +1258,14 @@ def reset_session():
 # and it also correctly re-fires if one side refreshes mid-session.
 _rooms = {}
 
+# socket sid -> (session_id, room_code). Filled by on_analysis_frame so
+# on_disconnect can free the engine slot IMMEDIATELY when a participant
+# closes the tab / refreshes, instead of holding one of the
+# MAX_ACTIVE_SESSIONS slots hostage for STALE_AFTER_SEC (60s) - which is
+# exactly long enough to show "Server at capacity" to the next person
+# during a live demo.
+_SOCKET_SESSIONS = {}
+
 @socketio.on('join')
 def on_join(data):
     room = data.get('room')
@@ -1227,6 +1291,17 @@ def on_disconnect():
         for role in ('verifier', 'participant'):
             if state.get(role) == request.sid:
                 state[role] = None
+    # Free this participant's engine slot right away (see _SOCKET_SESSIONS
+    # comment). Without this, only an explicit 'analysis_end' releases the
+    # slot, and a tab-close/refresh leaks it for STALE_AFTER_SEC.
+    mapped = _SOCKET_SESSIONS.pop(request.sid, None)
+    if mapped:
+        sess, code = mapped
+        drop_session(sess)
+        room = get_room(code)
+        if room is not None:
+            room.clients.pop(sess, None)
+        print(f"[ROOM {code}] client disconnected: {sess} (engine slot freed)")
 
 @socketio.on('offer')
 def on_offer(data):
@@ -1275,12 +1350,71 @@ def on_analysis_frame(data):
 
     ear = data.get('ear')
     yaw_ratio = data.get('yaw_ratio')
+    _SOCKET_SESSIONS[request.sid] = (sid, code)   # for on_disconnect cleanup
+
     fusion = eng.process_frame(
         frame,
         ear=ear if isinstance(ear, (int, float)) else None,
         yaw_ratio=yaw_ratio if isinstance(yaw_ratio, (int, float)) else None)
     if fusion:
         state = room.client(sid)          # per-client state, not a global one
+
+        # ── Camera integrity (server-authoritative) ─────────────────
+        # participant.html sends the MediaStreamTrack label with every
+        # frame. The browser's own HARD/SOFT verdict is display-only;
+        # the server re-classifies the NAME here via
+        # security/device_check.py, so one server-side list decides what
+        # counts as an injection tool. NOTE: the label is client-supplied
+        # and a modified client can lie about it - this is a deterrent
+        # against off-the-shelf tools (OBS etc.), not a cryptographic
+        # guarantee. Document as such in the threat model.
+        cam_name = data.get('camera_name')
+        cam_class, _cam_match = classify_camera_label(cam_name)
+        if cam_name and cam_name != state.camera_name:
+            state.camera_name = cam_name
+            state.camera_class = cam_class
+            print(f"[ROOM {room.code}] {sid} camera: {cam_name} ({cam_class})")
+            log_event(state, "camera_info",
+                      "Active camera: {} [{}]".format(cam_name, cam_class.upper()))
+
+        # Wire the classification into the fusion payload BEFORE
+        # ingest_fusion() so state, the /scores fusion, the dashboard and
+        # the participant all see one consistent verdict.
+        #   HARD ('virtual')  -> hard deny + fraud (mirrors main.py local path)
+        #   SOFT ('suspect')  -> 15% score penalty, NEVER a denial
+        #   'physical'        -> healthy injection signal (90)
+        #   'unknown'         -> injection signal stays MISSING, as before
+        sigs = fusion.setdefault('signals', {})
+        if cam_class == 'virtual':
+            deny = fusion.setdefault('hard_deny_reasons', [])
+            if 'virtual_camera_detected' not in deny:
+                deny.append('virtual_camera_detected')
+            sigs['virtual_camera_detected'] = True
+            sigs['injection_risk_score'] = 5
+            sigs['device_name'] = cam_name
+            fusion['trust_score'] = min(fusion.get('trust_score', 50), 15)
+            fusion['trust_band'] = 'fraud'
+            fusion['verdict'] = 'ACCESS DENIED'
+        elif cam_class == 'suspect':
+            sigs['virtual_camera_detected'] = False
+            sigs['injection_risk_score'] = 55
+            sigs['device_name'] = cam_name
+            penalized = int(round(fusion.get('trust_score', 50) * 0.85))
+            fusion['trust_score'] = penalized
+            # Re-derive band with the same 80/50 thresholds engine.py uses.
+            fusion['trust_band'] = ('trusted' if penalized >= 80
+                                    else 'suspicious' if penalized >= 50
+                                    else 'fraud')
+            if not fusion.get('hard_deny_reasons'):
+                fusion['verdict'] = ('ACCESS GRANTED'
+                                     if fusion['trust_band'] in ('trusted', 'suspicious')
+                                     else 'ACCESS DENIED')
+        elif cam_class == 'physical':
+            sigs.setdefault('virtual_camera_detected', False)
+            sigs['injection_risk_score'] = 90
+            sigs['device_name'] = cam_name
+        # ─────────────────────────────────────────────────────────────
+
         ingest_fusion(fusion, state)
         state.summary = {
             "trust_score": fusion.get("trust_score"),

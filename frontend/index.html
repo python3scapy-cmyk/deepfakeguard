@@ -218,7 +218,8 @@ document.addEventListener('DOMContentLoaded', function(){
 
         try {
             const res = await fetch('/analyze-upload?code=' + encodeURIComponent(ROOM_CODE || ''),
-                                    { method: 'POST', body: form });
+                                    { method: 'POST', body: form,
+                                      headers: { 'X-Admin-Pin': ADMIN_PIN } });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'analysis failed');
             renderUploadResults(data);
@@ -1255,7 +1256,7 @@ document.getElementById('sessionResetBtn').addEventListener('click', async funct
     try {
         await fetch('/session-reset?code=' + encodeURIComponent(ROOM_CODE) +
             (FOCUSED_SESSION ? '&session=' + encodeURIComponent(FOCUSED_SESSION) : ''),
-            { method: 'POST' });
+            { method: 'POST', headers: { 'X-Admin-Pin': ADMIN_PIN } });
         lastRenderedLogLength = 0;
         fetchLiveScores();
     } catch (err) {
@@ -1490,13 +1491,18 @@ function applyLiveData(data) {
         }
     }
 
-    // ── Modules reporting count ─────────────────
+    // ── Modules reporting count + camera identity ─────────────────
     const reporting = data.modules_reporting || [];
     const missingCount = (data.signal_missing || []).length;
+    const cam = data.camera || {};
+    const camText = cam.name
+        ? ' · cam: ' + cam.name + (cam.class ? ' [' + cam.class.toUpperCase() + ']' : '')
+        : '';
     document.getElementById('sessionIdText').textContent =
         'Session ID: ' + generateSessionId() +
         ' · ' + reporting.length + '/4 modules active' +
-        (missingCount > 0 ? ' · ' + missingCount + ' missing' : '');
+        (missingCount > 0 ? ' · ' + missingCount + ' missing' : '') +
+        camText;
 }
 
 // ── Cycle button now sends a test payload ───
@@ -1550,14 +1556,20 @@ document.getElementById('cycleBtn').addEventListener('click', async () => {
     };
 
     try {
+        // Same fix as postScore(): write into the room being viewed,
+        // with the PIN the backend now requires for coded-room writes.
+        if (ROOM_CODE) {
+            visionPayload.room_code = ROOM_CODE;
+            identityPayload.room_code = ROOM_CODE;
+        }
         await fetch('/score', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Pin': ADMIN_PIN },
             body: JSON.stringify(visionPayload)
         });
         await fetch('/score', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Pin': ADMIN_PIN },
             body: JSON.stringify(identityPayload)
         });
     } catch (err) {
@@ -1780,9 +1792,15 @@ bootVerifier();
 // demo is 100% predictable: attack always tanks the score hard,
 // legit always brings it back to a clean "Trusted" state.
 async function postScore(payload) {
+    // Target the room this dashboard is actually VIEWING. Without
+    // room_code these demo payloads landed in the invisible LOCAL room
+    // while the dashboard polled ?code=ROOM_CODE - so the simulator
+    // buttons silently did nothing. The PIN header is required by the
+    // backend for coded-room writes.
+    if (ROOM_CODE) payload.room_code = ROOM_CODE;
     await fetch('/score', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Pin': ADMIN_PIN },
         body: JSON.stringify(payload)
     });
 }

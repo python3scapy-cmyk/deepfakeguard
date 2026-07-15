@@ -36,3 +36,7 @@ kagglehub
 scikit-learn
 # Test suite (tests/test_fusion_parity.py)
 pytest
+# Local camera enumeration on Windows (security/device_check.py ->
+# security_module -> main.py). Windows-only; without it main.py's local
+# pipeline crashes on the first security poll on your dev box.
+pygrabber; sys_platform == "win32"

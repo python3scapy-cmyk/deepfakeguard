@@ -48,13 +48,39 @@ def main():
 
     summaries = {}
     disagreements = []
+    sample_missing = defaultdict(list)   # label -> [signal_missing_count per sample]
     with open(args.csv_path, newline="") as f:
         for row in csv.DictReader(f):
+            if row["row_type"] == "sample":
+                try:
+                    sample_missing[row["session_label"]].append(
+                        int(row.get("signal_missing_count") or 0))
+                except ValueError:
+                    pass
+                continue
             if row["row_type"] != "summary":
                 continue
             summaries[row["session_label"]] = row  # last write wins if a session was rerun
             if row.get("band_disagreement") == "True":
                 disagreements.append(row["session_label"])
+
+    # Data-quality gate: a session whose samples MOSTLY have all five
+    # signals missing was recorded against an empty room (e.g. /scores
+    # polled without ?code= while the session ran in a coded room). Its
+    # "final band" is just the 50/suspicious idle default -- including it
+    # would fabricate APCER/BPCER numbers out of nothing. Exclude it.
+    ALL_MISSING = 5
+    invalid = []
+    for label in list(summaries.keys()):
+        counts = sample_missing.get(label, [])
+        if counts and sum(1 for c in counts if c >= ALL_MISSING) / len(counts) > 0.5:
+            invalid.append(label)
+            del summaries[label]
+    if invalid:
+        print(f"[WARN] EXCLUDED {len(invalid)} session(s) recorded with no live "
+              f"signals (mostly signal_missing_count=5): {sorted(invalid)}\n"
+              f"       These were almost certainly recorded without --code "
+              f"against the empty LOCAL room. Re-record them.\n", file=sys.stderr)
 
     bonafide, attacks = [], defaultdict(list)
     unrecognized = []
